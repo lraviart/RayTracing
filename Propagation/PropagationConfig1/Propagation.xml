@@ -11,7 +11,7 @@
 
 <!-- Materials -->
 
-	<bsdf type="twosided" id="mat-itu_concrete" name="mat-itu_concrete">
+	<bsdf type="twosided" id="mat-itu-concrete" name="mat-itu-concrete">
 		<bsdf type="principled" name="bsdf">
 			<rgb value="0.800000 0.800000 0.800000" name="base_color"/>
 			<float name="spec_tint" value="0.000000"/>
@@ -35,7 +35,7 @@
 	<shape type="ply" id="elm__2" name="elm__2">
 		<string name="filename" value="meshes/Cube.ply"/>
 		<boolean name="face_normals" value="true"/>
-		<ref id="mat-itu_concrete" name="bsdf"/>
+		<ref id="mat-itu-concrete" name="bsdf"/>
 	</shape>
 
 <!-- Volumes -->
