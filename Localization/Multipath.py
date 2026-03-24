@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import optimize
+from scipy.signal import resample
 
 
 ###############################
@@ -32,65 +33,141 @@ def find_position_TX(positions_RX, delays, angles):
         first_angles.append(angle[index])
 
 
-def select_delay(delays, magnitudes):
+def clean_algorithm(taps, t):
 
-    energies = magnitudes**2
+    max_iter = 100
+    threshold = np.max(np.abs(taps)) * 1e-2
+    B = 1 / (t[1] - t[0])
 
-    
-##################################
-##### TDOA-based localization ####
-##################################
+    oversample_factor = 10
+    num_samples = len(taps)
 
+    taps_oversampled, t_oversampled = resample(taps, num_samples * oversample_factor, t=t)
+    original_taps = taps_oversampled.copy()
+    cleaned_taps = np.zeros_like(taps_oversampled)
 
-def get_tdoas(delays):
-    """
-    Calculate TDOAs from the delays of the paths.
-    """
-
-    # Set first delay as reference
-    reference_delay = 0
-    reference_index = 0
-    for i in range(len(delays)):
-        if delays[i] > 0:
-            reference_index = i
-            reference_delay = delays[i]
-            break
-
-    tdoas = np.zeros(len(delays))
-    valid = np.zeros(len(delays), dtype=bool)
-    for i in range(reference_index+1, len(delays)):
-        if delays[i] > 0:
-            tdoa = delays[i] - reference_delay
-            tdoas[i] = tdoa
-            valid[i] = True
-    return tdoas, valid
-
-
-def mse_function(guess, positions_RX, tdoas, valid):
-    cost = 0
     index = 0
-    for i in range(len(positions_RX)):
-        for j in range(i+1, len(positions_RX)):
-            distance = dist(guess, positions_RX[i]) - dist(guess, positions_RX[j])
-            cost += (tdoas[index]*3e8 - distance)**2
-            index += 1
-    return cost
+    for _ in range(max_iter):
+        max_index = np.argmax(np.abs(taps_oversampled))
+        if np.abs(taps_oversampled[max_index]) < threshold:
+            break
+        cleaned_taps[max_index] += 0.1 * taps_oversampled[max_index]
+        taps_oversampled -= taps_oversampled[max_index] * 0.1 * np.sinc((t_oversampled - t_oversampled[max_index]) * B)
+        index += 1
+
+    return cleaned_taps, t_oversampled, taps_oversampled, original_taps, index
+  
 
 
-def get_position_from_tdoas(positions_RX, tdoas):
 
-    # Average of RX positions as first guess
-    starter_x = 0
-    starter_y = 0
-    for i in range(len(positions_RX)):
-        starter_x += positions_RX[i][0]
-        starter_y += positions_RX[i][1]
-    starter_x /= len(positions_RX)
-    starter_y /= len(positions_RX)
 
-    point = optimize.minimize(fun=mse_function, x0=[starter_x, starter_y], args=(positions_RX, tdoas), method='Nelder-Mead')
+# OFDM framework for MUSIC algorithm
 
-    return point.x
+def cir_to_ofdm_channel(frequencies, a, tau):
 
+    h = np.zeros_like(frequencies, dtype=complex)
+    for i in range(len(a)):
+        h += a[i] * np.exp(-1j * 2 * np.pi * frequencies * tau[i])
+    return h
+
+
+def apply_ofdm_channel(x, h, no):
+
+    noise = np.random.normal(size=x.shape) + 1j * np.random.normal(size=x.shape)
+    y = h * x + no * noise    
+    return y
+
+
+def subcarrier_frequencies(fft_size, subcarrier_spacing):
+
+    return np.arange(-fft_size//2, fft_size//2) * subcarrier_spacing
+
+
+def zadoff_chu_seq(u, N):
+
+    n = np.arange(N)
+    seq = np.exp(-1j * np.pi * u * n * (n + 1) / N)
+    return seq
+
+
+def pilot_pattern(num_ofdm_symbols, fft_size):
+
+    # Zadoff-Chu sequence
+    u = 23
+    x = np.zeros((num_ofdm_symbols, fft_size), dtype=complex)
+    for i in range(num_ofdm_symbols):
+        x[i] = zadoff_chu_seq(u, fft_size)
+
+    return x
+
+
+def estimate_channel(y, x):
+
+    h_hat = y / x
+    return h_hat
+
+
+def MUSIC(B, fft_size, num_ofdm_symbols, a, tau, no=0):
+
+    ### Simulation of the OFDM system
+    frequencies = subcarrier_frequencies(fft_size, B/fft_size)
+    h = cir_to_ofdm_channel(frequencies, a, tau)
+
+    x = pilot_pattern(num_ofdm_symbols, fft_size)
+    y = apply_ofdm_channel(x, h, no)
+
+    # Estimation of the channel
+    h_hat = estimate_channel(y, x)
+
+
+    ### MUSIC algorithm
+
+    # Subdivision of the channel into subblocks
+    M = 512 # Size of subblocks
+    N_sym = fft_size - M + 1 
+    N = num_ofdm_symbols * N_sym # Total snapshots
+    h_blocks = np.zeros((N, M), dtype=complex)
+    
+    idx = 0
+    for i in range(num_ofdm_symbols):
+        for j in range(N_sym):
+            h_blocks[idx] = h_hat[i, j:j+M]
+            idx += 1
+    # Autocorreleation matrix
+    R = h_blocks.T @ h_blocks.conj() / N
+
+    # Eigenvalue decomposition
+    eigenvalues, eigenvectors = np.linalg.eigh(R)
+    eigenvalues = np.flip(eigenvalues)
+    eigenvectors = np.flip(eigenvectors, axis=1)
+
+    # Estimation of the number of paths with the MDL criterion
+    L = M 
+    mdl = np.zeros(L)
+
+    for k in range(L):
+        if k == L - 1:
+            mdl[k] = 0.5 * k * (2*L - k) * np.log(N)
+            continue
+            
+        log_num = np.sum(np.log(eigenvalues[k:L])) / (L-k)
+        log_den = np.log(np.sum(eigenvalues[k:L]) / (L-k))
+        log_Lambda_ratio = log_num - log_den
         
+        mdl[k] = -N * (L-k) * log_Lambda_ratio + 0.5 * k * (2*L - k) * np.log(N)
+
+    k_opt = np.argmin(mdl)
+    print("Optimal number of paths:", k_opt)
+    k_opt = 4 # For testing purposes
+
+    # Noise subspace
+    U = eigenvectors[:, k_opt:]
+
+    # MUSIC spectrum
+    tau = np.linspace(0, 2e-7, 1000)
+    freq = np.arange(M) * (B/fft_size) 
+    a = np.exp(-1j * 2 * np.pi * np.outer(freq, tau))
+    P = 1 / np.sum(np.abs(U.conj().T @ a)**2, axis=0)
+
+    return P, tau, h, h_hat
 
