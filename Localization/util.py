@@ -47,7 +47,7 @@ def format_cir(cir):
 
 
 
-def format_paths(cir, angles):
+def format_paths(cir, angles, array=False):
 
     """
     Extract the delays, magnitudes and angles from the cir and angles objects given by sionna
@@ -73,9 +73,13 @@ def format_paths(cir, angles):
     angles = angles[..., :].numpy()
 
     a = coeffs_re + 1j*coeffs_im
-    a = a.reshape(a.shape[0], -1)
+    if not array:
+        a = a.reshape(a.shape[0], -1) 
+    else:
+        a = a.reshape(a.shape[0], a.shape[1], -1)
     tau = delays.reshape(delays.shape[0], -1)
     angles = angles.reshape(angles.shape[0], -1)
+
 
     # Removing points corresponding to -1 delay (no path)
     a_ = a
@@ -86,14 +90,26 @@ def format_paths(cir, angles):
     angles = []
     for i in range(a_.shape[0]):
         mask = tau_[i] >= 0
-        a.append(a_[i][mask])
+        if not array:
+            a.append(a_[i][mask])
+        else:
+            a_append = np.zeros((a_.shape[1], np.sum(mask)), dtype=complex)
+            for j in range(a_.shape[1]):
+                a_append[j] = a_[i, j][mask]
+            a.append(a_append)
         tau.append(tau_[i][mask])
         angles.append(angles_[i][mask])
 
     # Sort paths by delay
     for i in range(len(tau)):
         sort_indices = np.argsort(tau[i])
-        a[i] = a[i][sort_indices]
+        if not array:
+            a[i] = a[i][sort_indices]
+        else:
+            a_append = np.zeros((a[i].shape[0], a[i].shape[1]), dtype=complex)
+            for j in range(a_.shape[1]):
+                a_append[j] = a[i][j][sort_indices]
+            a[i] = a_append
         tau[i] = tau[i][sort_indices]
         angles[i] = angles[i][sort_indices]
 
