@@ -81,8 +81,31 @@ def RRC(t, tau, B, alpha):
 
     # Normalize the pulse amplitude to 1
     # rrc_pulse /= np.max(np.abs(rrc_pulse))
+
+    rrc_pulse *= np.hamming(len(rrc_pulse)) # Apply Hamming window to reduce side lobes
     
     return rrc_pulse
+
+
+def RC_freq(f, B, alpha):
+    """
+    Computes the Raised Cosine pulse in frequency domain.
+    f: Frequency array
+    B: Bandwidth
+    alpha: Roll-off factor (0 to 1)
+    """
+    H = np.zeros_like(f, dtype=complex)
+    
+    # Define the frequency response based on the piecewise conditions
+    for i in range(len(f)):
+        if np.abs(f[i]) <= (1 - alpha) * B / 2:
+            H[i] = 1
+        elif (1 - alpha) * B / 2 < np.abs(f[i]) <= (1 + alpha) * B / 2:
+            H[i] = 0.5 * (1 + np.cos(np.pi * (np.abs(f[i]) - (1 - alpha) * B / 2) / (alpha * B)))
+        else:
+            H[i] = 0
+            
+    return H
 
 
 def zadoff_chu_seq(u, N):
@@ -190,7 +213,7 @@ def cir_to_sc_cp_channel(a, tau, B, alpha=0.5):
     t = np.linspace(0, 1/B, 1000) # Time array for pulse shaping
     h = np.zeros_like(t, dtype=complex)
     for i in range(len(a)):
-        h += a[i] * RC(t, tau[i], B, alpha) # Using Raised Cosine pulse for time domain representation
+        h += a[i] * RRC(t, tau[i], B, alpha) # Using Raised Cosine pulse for time domain representation
     return h
 
 
@@ -248,8 +271,8 @@ def get_sc_cp_channel_response(a, tau, B, osr, T=1e6, Tcir=2e-7, fft_size=512, a
 
     y = y + np.sqrt(no) * noise
 
-    # print("Noise power:", np.mean(np.abs(np.sqrt(no) * noise)**2))
-    # noise_filtered = np.convolve(np.sqrt(no) * noise, RRC(t, 0, B, alpha), mode='full')[t0_idx:t0_idx+N_ext] / osr
+    # print("Noise power:", np.mean(np.abs(np.sqrt(no/2) * noise)**2))
+    # noise_filtered = np.convolve(np.sqrt(no/2) * noise, RRC(t, 0, B, alpha), mode='full')[t0_idx:t0_idx+N_ext] / osr
     # print("Filtered noise power:", np.mean(np.abs(noise_filtered)**2))
 
     # Matched filtering
@@ -283,8 +306,8 @@ def cir_to_ofdm_channel(frequencies, a, tau):
 def apply_ofdm_channel(x, h, no):
 
     noise = np.random.normal(size=x.shape) + 1j * np.random.normal(size=x.shape)
-    print("Noise power:", np.mean(np.abs(np.sqrt(no) * noise)**2))
-    y = h * x + np.sqrt(no) * noise    
+    print("Noise power:", np.mean(np.abs(np.sqrt(no/2) * noise)**2))
+    y = h * x + np.sqrt(no/2) * noise    
     return y
 
 

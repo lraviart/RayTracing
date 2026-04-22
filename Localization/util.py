@@ -115,3 +115,30 @@ def format_paths(cir, angles, array=False):
 
     return a, tau, angles
     
+
+def bound_angle(angle):
+    return (angle + np.pi) % (2*np.pi) - np.pi
+
+
+def format_local_angles(angles, RX_orientations):
+
+    """
+    Format the angles given by sionna to be relative to the receiver orientation
+
+    Args:
+        angles: list of arrays of shape [num_rx, num_tx, num_paths] 
+        RX_orientations: list of arrays of shape [num_rx, 3] (yaw, pitch, roll)
+
+    Returns:
+        angles: list of arrays (for each receiver) of angles of the paths relative to the receiver orientation
+    
+    """
+    local_angles = []
+    for i in range(len(angles)):
+        local_angles.append(bound_angle(angles[i] - RX_orientations[i][0]))
+
+    return local_angles
+
+
+def global_angle(local_angle, RX_orientation):
+    return bound_angle(local_angle + RX_orientation[0])

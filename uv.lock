@@ -1158,6 +1158,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "numpy" },
+    { name = "scikit-commpy" },
     { name = "sionna" },
     { name = "torch" },
 ]
@@ -1165,9 +1166,22 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=1.26.4" },
+    { name = "scikit-commpy", specifier = ">=0.8.0" },
     { name = "sionna", specifier = ">=2.0.0" },
     { name = "torch", specifier = ">=2.9.0" },
 ]
+
+[[package]]
+name = "scikit-commpy"
+version = "0.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "scipy" },
+    { name = "sympy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ad/7b/0adced3f6f3d1082576620c585dff07bcb46fadd9e73b180759c6836f665/scikit-commpy-0.8.0.tar.gz", hash = "sha256:69714e745a2c06881af786933b19116cf69a5533f2e67a8f4f0bad4e6c907834", size = 102784, upload-time = "2022-10-10T08:05:15.001Z" }
 
 [[package]]
 name = "scipy"
