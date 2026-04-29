@@ -82,8 +82,6 @@ def RRC(t, tau, B, alpha):
     # Normalize the pulse amplitude to 1
     # rrc_pulse /= np.max(np.abs(rrc_pulse))
 
-    rrc_pulse *= np.hamming(len(rrc_pulse)) # Apply Hamming window to reduce side lobes
-    
     return rrc_pulse
 
 
@@ -208,14 +206,6 @@ def get_sc_channel_response(a, tau, B, osr, T=1e-6, Tcir=2e-7, alpha=0.5):
 ### SC-CP framework ###
 #######################
 
-def cir_to_sc_cp_channel(a, tau, B, alpha=0.5):
-
-    t = np.linspace(0, 1/B, 1000) # Time array for pulse shaping
-    h = np.zeros_like(t, dtype=complex)
-    for i in range(len(a)):
-        h += a[i] * RRC(t, tau[i], B, alpha) # Using Raised Cosine pulse for time domain representation
-    return h
-
 
 def estimate_sc_cp_channel(r, x, L):
     """
@@ -266,13 +256,19 @@ def get_sc_cp_channel_response(a, tau, B, osr, T=1e6, Tcir=2e-7, fft_size=512, a
     y = np.convolve(x, h_time, mode='full')[t0_idx:t0_idx+N_ext]
 
     # Add noise
-    no = 1.38e-23 * 290 * B * osr # Noise power (k*T*B)
+    no = 1.38e-23 * 290 # Noise power spectral density (k*T)
+    sigma_n = no * B * osr * 1e0 # Noise power (k*T*B)
+    sigma_n *= 10**(10/10) # Add 10 dB Noise Figure
     noise = np.random.normal(size=y.shape) + 1j * np.random.normal(size=y.shape)
 
-    y = y + np.sqrt(no) * noise
+    # print("Signal energy:", np.sum(np.abs(y)**2))
+    # signal_filtered = np.convolve(y, RRC(t, 0, B, alpha), mode='full')[t0_idx:t0_idx+N_ext] / osr
+    # print("Filtered signal energy:", np.sum(np.abs(signal_filtered)**2))
 
-    # print("Noise power:", np.mean(np.abs(np.sqrt(no/2) * noise)**2))
-    # noise_filtered = np.convolve(np.sqrt(no/2) * noise, RRC(t, 0, B, alpha), mode='full')[t0_idx:t0_idx+N_ext] / osr
+    y = y + np.sqrt(sigma_n/2) * noise
+
+    # print("Noise power:", np.mean(np.abs(np.sqrt(sigma_n/2) * noise)**2))
+    # noise_filtered = np.convolve(np.sqrt(sigma_n/2) * noise, RRC(t, 0, B, alpha), mode='full')[t0_idx:t0_idx+N_ext] / osr
     # print("Filtered noise power:", np.mean(np.abs(noise_filtered)**2))
 
     # Matched filtering

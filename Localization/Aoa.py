@@ -63,3 +63,19 @@ class AoaLocalization:
         point = optimize.minimize(self.mse, self.initial_guess(), method='Nelder-Mead')
 
         return point.x
+    
+
+    def localize_least_squares(self):
+
+        A = np.zeros((len(self.aoas), 2))
+        b = np.zeros(len(self.aoas))
+
+        for i, aoa in enumerate(self.aoas):
+            A[i, 0] = np.sin(aoa.angle)
+            A[i, 1] = -np.cos(aoa.angle)
+            b[i] = aoa.RX.position[0] * np.sin(aoa.angle) - aoa.RX.position[1] * np.cos(aoa.angle)
+
+        # Solve the least squares problem
+        estimate = np.linalg.lstsq(A, b, rcond=None)[0]
+
+        return estimate

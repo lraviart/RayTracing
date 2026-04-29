@@ -120,22 +120,15 @@ def MUSIC_spectrum_OFDM(B, fft_size, num_ofdm_symbols, a, tau, no=1e-12):
 
 def MUSIC_spectrum(a, tau, B, fft_size=512, T=1e-6, Tcir=2e-7, osr=8, alpha=0.1, num_pilots=10):
     
-    fft_size_ = fft_size
+    fft_size_ = int(fft_size) # * (1-2*alpha))
     h_hat = np.zeros((num_pilots, fft_size_), dtype=complex)
     for i in range(num_pilots):
-        h_hat[i] = np.fft.fftshift(np.fft.fft(com.get_sc_cp_channel_response(a, tau, B, osr, T=T, Tcir=Tcir, fft_size=fft_size, alpha=alpha)[0]))
+        h_time = com.get_sc_cp_channel_response(a, tau, B, osr, T=T, Tcir=Tcir, fft_size=fft_size, alpha=alpha)[0]
+        h_hat[i] = np.fft.fftshift(np.fft.fft(h_time))# [int(fft_size*alpha):int(fft_size*alpha)+fft_size_]
 
     # Deconvolution 
-    frequencies = np.linspace(-B/2, B/2, fft_size)
-    h_hat = h_hat / com.RC_freq(frequencies, B, alpha)
-
-    plt.figure(figsize=(8, 4))
-    plt.plot(frequencies, 20*np.log10(np.abs(h_hat[0])), label='Estimated Channel Spectrum')
-    plt.xlabel("Frequency (Hz)")
-    plt.ylabel("Magnitude (dB)")
-    plt.legend()
-    plt.show()
-
+    # frequencies = np.linspace(-B/2, B/2, fft_size)
+    # h_hat = h_hat / com.RC_freq(frequencies, B, alpha)
 
     ### MUSIC algorithm
 
@@ -184,7 +177,11 @@ def MUSIC_spectrum(a, tau, B, fft_size=512, T=1e-6, Tcir=2e-7, osr=8, alpha=0.1,
     # MUSIC spectrum
     tau = np.linspace(0, Tcir, 1000)
     freq = np.arange(M) * (B/fft_size) 
-    a = np.exp(-1j * 2*np.pi * np.outer(freq, tau))
+
+    # Broadcasting
+    tau_grid = tau[None, :]                 # Shape: (1, len(tau))
+    f_grid = freq[:, None]                  # Shape: (M, 1)
+    a = np.exp(-1j * 2*np.pi * f_grid * tau_grid) # Shape: (M, len(tau))
     P = 1 / np.sum(np.abs(U.conj().T @ a)**2, axis=0)
 
     return P, tau, k_opt, h_hat
@@ -238,12 +235,13 @@ def MUSIC_taps(spectrum, tau, df, K, h_hat):
 
 def MUSIC_2D_spectrum(a, tau, B, fc=3.5e9, fft_size=512, T=1e-6, Tcir=2e-7, osr=8, alpha=0.1, num_pilots=10):
 
-    fft_size_ = int(fft_size * 0.8)
+    fft_size_ = int(fft_size) # * (1-2*alpha))
     num_rx_ant = a.shape[0]
     h_hat = np.zeros((num_pilots, num_rx_ant, fft_size_), dtype=complex)
     for i in range(num_pilots):
         for j in range(num_rx_ant):
-            h_hat[i, j] = np.fft.fftshift(np.fft.fft(com.get_sc_cp_channel_response(a[j], tau, B, osr, T=T, Tcir=Tcir, fft_size=fft_size, alpha=alpha)[0]))[int(fft_size*0.1):int(fft_size*0.1)+fft_size_]
+            h_time = com.get_sc_cp_channel_response(a[j], tau, B, osr, T=T, Tcir=Tcir, fft_size=fft_size, alpha=alpha)[0]
+            h_hat[i, j] = np.fft.fftshift(np.fft.fft(h_time))# [int(fft_size*alpha):int(fft_size*alpha)+fft_size_]
 
     
     ### MUSIC algorithm
@@ -282,13 +280,14 @@ def MUSIC_2D_spectrum(a, tau, B, fc=3.5e9, fft_size=512, T=1e-6, Tcir=2e-7, osr=
 
     k_opt = np.argmin(mdl)
     print("Optimal number of paths:", k_opt)
+    print("Eigenvalues around the threshold:", eigenvalues[k_opt-3:k_opt+5])
 
     # Noise subspace
     U = eigenvectors[:, k_opt:]
 
     # MUSIC spectrum
-    tau = np.linspace(0, Tcir, 500)
-    angles = np.linspace(-np.pi/2, np.pi/2, 90)
+    tau = np.linspace(0, Tcir, 1000)
+    angles = np.linspace(-np.pi/2, np.pi/2, 180)
     freq = np.arange(M) * (B/fft_size)
 
     # Broadcasting
@@ -318,7 +317,7 @@ def find_2D_peaks(spectrum, num_peaks):
     safe_spectrum = spectrum + np.random.uniform(0, 1e-10, size=spectrum.shape)
 
     # Find local maxima in the 2D spectrum
-    footprint = np.ones((3, 3))
+    footprint = np.ones((7, 7))
     mask = maximum_filter(safe_spectrum, footprint=footprint) == safe_spectrum
     peaks = np.argwhere(mask)
 
@@ -363,3 +362,20 @@ def MUSIC_2D_taps(spectrum, tau, angles, df, K, h_hat):
     a_hat, residuals, rank, s = np.linalg.lstsq(A, h_mean, rcond=None)
     
     return a_hat, estimated_taus, estimated_angles
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
