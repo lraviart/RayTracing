@@ -17,35 +17,45 @@ class Rx:
 
 class Tdoa:
 
-    def __init__(self, Rx1, Rx2, delay1, delay2, a1, a2):
+    def __init__(self, Rx1, Rx2, delay1, delay2):
 
         self.Rx1 = Rx1
         self.Rx2 = Rx2
         self.tdoa = delay1 - delay2
-        self.a1 = a1
-        self.a2 = a2
+        if np.abs(self.tdoa) > dist(Rx1.position, Rx2.position) / c_0:
+            raise ValueError("TDOA cannot be greater than the distance between receivers divided by the speed of light")
 
 
     
 class TdoaLocalization:
 
-    def __init__(self, RX_positions, first_toas, amplitudes):
+    def __init__(self, RX_positions, first_toas, valid_Rxs=None, ref_index=None):
 
         self.RXs = []
         for i in range(len(RX_positions)):
             self.RXs.append(Rx(f"Rx{i}", RX_positions[i]))
-        self.valid = [True if first_toas[i] > 0 else False for i in range(len(first_toas))]
+
+        if valid_Rxs is not None:
+            self.valid = valid_Rxs
+        else:
+            self.valid = [True if first_toas[i] > 0 else False for i in range(len(first_toas))]
+
         self.first_toas = first_toas
-        self.amplitudes = amplitudes
 
         # Find reference delay
-        self.ref_index = -1
-        for i in range(len(first_toas)):
-            if self.valid[i]:
-                self.ref_index = i
-                break
-        if self.ref_index == -1:
-            raise ValueError("No valid delay found")
+        if ref_index is not None:
+            print("Reference index provided:", ref_index)
+            if not self.valid[ref_index]:
+                raise ValueError("Reference index must have a valid delay")
+            self.ref_index = ref_index
+        else:
+            self.ref_index = -1
+            for i in range(len(first_toas)):
+                if self.valid[i]:
+                    self.ref_index = i
+                    break
+            if self.ref_index == -1:
+                raise ValueError("No valid delay found")
         
         # Calculate TDOAs
         self.get_tdoas(self.ref_index)
@@ -62,8 +72,7 @@ class TdoaLocalization:
         for i in range(len(self.first_toas)):
             if i != ref_index and self.valid[i]:
                 tdoas.append(Tdoa(self.RXs[i], self.RXs[ref_index],
-                                  self.first_toas[i], self.first_toas[ref_index],  
-                                  self.amplitudes[i], self.amplitudes[ref_index]))
+                                  self.first_toas[i], self.first_toas[ref_index]))
         self.tdoas = tdoas
 
         return tdoas
@@ -97,6 +106,7 @@ class TdoaLocalization:
     
 
     def localize(self):
+
         point = optimize.minimize(fun=self.mse_function, x0=self.initial_guess(), args=(), method='Nelder-Mead')
 
         return point.x
@@ -121,7 +131,6 @@ class TdoaLocalization:
         u = A_proj @ b
         v = A_proj @ c
 
-
         # Solve the quadratic equation
         quad_a = 1 - v.T @ v
         quad_b = -2 * u.T @ v
@@ -132,6 +141,8 @@ class TdoaLocalization:
         
         root1 = (-quad_b + np.sqrt(discriminant)) / (2*quad_a)
         root2 = (-quad_b - np.sqrt(discriminant)) / (2*quad_a)
+
+        print("Roots:", root1, root2)
 
         # Choose the solution
         if root1 > 0 and root2 < 0:
@@ -239,43 +250,21 @@ class TdoaLocalization:
             # Invalidate receiver with highest error
             max_error_index = np.argmax(errors)
             self.valid[max_error_index] = False  # Invalidate the delay for this receiver
+            if max_error_index == self.ref_index:
+                # If the reference index is invalidated, choose a new reference index
+                new_ref_index = -1
+                for j in range(len(self.first_toas)):
+                    if self.valid[j]:
+                        new_ref_index = j
+                        break
+                if new_ref_index == -1:
+                    raise ValueError("No valid delay found after outlier removal")
+                self.ref_index = new_ref_index
+
+            print(self.valid)
             self.get_tdoas(self.ref_index)  # Recalculate TDOAs with updated receivers
             estimate = self.localize_least_squares()  # Re-localize with updated TDOAs
 
         return estimate
 
-
-    def filter_receivers(self, estimate):
-
-        estimated_distances = []
-        for i in range(len(self.RXs)):
-            estimated_distances.append(dist(estimate, self.RXs[i].position))
-        
-        C = np.zeros((len(self.RXs), len(self.RXs)))
-        k = 0.01
-        for i in range(len(self.first_toas)):
-            for j in range(i+1, len(self.first_toas)):
-                if self.first_toas[i] > 0 and self.first_toas[j] > 0:
-                    delta_ij = np.abs(np.log(estimated_distances[i] * self.amplitudes[i] - \
-                                             estimated_distances[j] * self.amplitudes[j]))
-                    # print(delta_ij)
-                    C[i, j] = np.exp(-k * delta_ij**2)
-
-        # print("Consistency scores:", C)
-            
-        scores = np.zeros(len(self.RXs))
-        for i in range(len(self.RXs)):
-            for j in range(len(self.RXs)):
-                if i != j:
-                    scores[i] += C[i, j] 
-
-        # Filter out receivers with low scores
-        mean_score = np.mean(scores)
-        for i in range(len(self.RXs)):
-            if scores[i] < mean_score * 0.5:
-                self.valid[i] = False  # Invalidate the delay for this receiver
-
-        print(self.valid)
-
-        return scores
 

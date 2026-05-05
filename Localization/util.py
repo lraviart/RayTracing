@@ -1,6 +1,8 @@
 import numpy as np
 
 
+### Ray-tracing related utilities ###
+
 def format_cir(cir):
 
     """
@@ -116,8 +118,16 @@ def format_paths(cir, angles, array=False):
     return a, tau, angles
     
 
+### Angle utilities ###
+
 def bound_angle(angle):
     return (angle + np.pi) % (2*np.pi) - np.pi
+
+def local_angle(global_angle, RX_orientation):
+    return bound_angle(global_angle - RX_orientation[0])
+
+def global_angle(local_angle, RX_orientation):
+    return bound_angle(local_angle + RX_orientation[0])
 
 
 def format_local_angles(angles, RX_orientations):
@@ -135,10 +145,8 @@ def format_local_angles(angles, RX_orientations):
     """
     local_angles = []
     for i in range(len(angles)):
-        local_angles.append(bound_angle(angles[i] - RX_orientations[i][0]))
+        local_angles.append(local_angle(angles[i], RX_orientations[i]))
 
     return local_angles
 
 
-def global_angle(local_angle, RX_orientation):
-    return bound_angle(local_angle + RX_orientation[0])

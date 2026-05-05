@@ -1,7 +1,7 @@
 import numpy as np
-from scipy import optimize
+from scipy.optimize import minimize, least_squares
+from util import global_angle
 from Tdoa import Rx, Tdoa
-from Aoa import Aoa
 
 c_0 = 299792458  # Speed of light in m/s
 
@@ -11,25 +11,41 @@ def dist(a, b):
 
 class HybridLocalization:
 
-    
 
-    def __init__(self, RX_positions, first_toas, first_aoas, amplitudes, second_toas=None, second_aoas=None, second_amplitudes=None, ref_index=None):
+    def __init__(self, Rx_positions, Rx_orientations, toas, aoas, ref_index=None):
 
+        # For TDOA
         self.Rxs = []
-        for i in range(len(RX_positions)):
-            self.Rxs.append(Rx(f"Rx{i}", RX_positions[i]))
-        self.valid = [True if first_toas[i] > 0 else False for i in range(len(first_toas))]
-        self.first_toas = first_toas
-        self.first_amplitudes = amplitudes
+        for i in range(len(Rx_positions)):
+            self.Rxs.append(Rx(f"Rx{i}", Rx_positions[i]))
+        # For Hybrid
+        self.Rx_positions = Rx_positions
+        self.Rx_orientations = Rx_orientations
+
+        self.valid = np.zeros(len(Rx_positions), dtype=bool)
+        self.first_used = np.zeros(len(Rx_positions), dtype=bool)
+        self.first_toas = np.zeros(len(Rx_positions))
+        self.first_aoas = np.zeros(len(Rx_positions))
+        self.second_toas = [[] for _ in range(len(Rx_positions))]
+        self.second_aoas = [[] for _ in range(len(Rx_positions))]
+        for i in range(len(Rx_positions)):
+            if len(toas[i]) > 0:
+                self.valid[i] = True
+                self.first_used[i] = True
+                self.first_toas[i] = toas[i][0]
+                self.first_aoas[i] = global_angle(aoas[i][0], self.Rx_orientations[i])
+                self.second_toas[i] = toas[i][1:]
+                self.second_aoas[i] = global_angle(aoas[i][1:], self.Rx_orientations[i])
 
         # Find reference delay
         if ref_index is not None:
             if not self.valid[ref_index]:
                 raise ValueError("Reference index must have a valid delay")
             self.ref_index = ref_index
+            
         else:
             self.ref_index = -1
-            for i in range(len(first_toas)):
+            for i in range(len(self.first_toas)):
                 if self.valid[i]:
                     self.ref_index = i
                     break
@@ -39,14 +55,6 @@ class HybridLocalization:
         # Calculate TDOAs
         self.get_tdoas(self.ref_index)
 
-        self.first_aoas = []
-        for i in range(len(first_aoas)):
-            if first_aoas[i] < 2*np.pi:
-                self.first_aoas.append(Aoa(self.Rxs[i], first_aoas[i]))
-
-        self.second_toas = second_toas
-        self.second_aoas = second_aoas
-        self.second_amplitudes = second_amplitudes
         
 
     def get_tdoas(self, ref_index):
@@ -60,32 +68,30 @@ class HybridLocalization:
         for i in range(len(self.first_toas)):
             if i != ref_index and self.valid[i]:
                 tdoas.append(Tdoa(self.Rxs[i], self.Rxs[ref_index],
-                                  self.first_toas[i], self.first_toas[ref_index],  
-                                  self.first_amplitudes[i], self.first_amplitudes[ref_index]))
+                                  self.first_toas[i], self.first_toas[ref_index]))
         self.tdoas = tdoas
 
         return tdoas
 
     
-    def initial_guess(self):
+    def initial_guess(self, time=False):
 
         # Initial guess: mean of Rx positions with valid angles and delays
-        valid_Rxs = []
-        for tdoa in self.tdoas:
-            if tdoa.Rx1 not in valid_Rxs:
-                valid_Rxs.append(tdoa.Rx1)
-            if tdoa.Rx2 not in valid_Rxs:
-                valid_Rxs.append(tdoa.Rx2)
-
-        for aoa in self.first_aoas:
-            if aoa.RX not in valid_Rxs:
-                valid_Rxs.append(aoa.RX)
-
         # Calculate the mean position
-        guess = np.mean([rx.position for rx in valid_Rxs], axis=0)
+        guess = 0
+        for i in range(len(self.Rxs)):
+            if self.valid[i]:
+                guess += self.Rxs[i].position
+        guess = guess / np.sum(self.valid)
+
+        if time:
+            t0 = np.min([self.first_toas[i] for i in range(len(self.first_toas)) if self.valid[i]])
+            guess = np.append(guess, t0)
 
         return guess
     
+
+    ### First order reflection methods
 
     def angle_sector(self, angle):
         # 1: 0 to 90, 2: 90 to 180, 3: -180 to -90, 4: -90 to 0
@@ -133,123 +139,468 @@ class HybridLocalization:
         return None  # No wall identified
     
 
-    def mse(self, estimate):
+    ### Error functions ###
 
+    def error_toa(self, estimate, Rx_idx):
+
+        x, y, t0 = estimate
+        error = ((self.first_toas[Rx_idx] - t0) * c_0 - dist([x, y], self.Rx_positions[Rx_idx]))
+    
+        return error
+    
+    def error_toa_jacobian(self, estimate, Rx_idx):
+
+        x, y, t0 = estimate
+        d = dist([x, y], self.Rx_positions[Rx_idx])
+        jacobian = np.zeros(3)
+        jacobian[0] = -(x - self.Rx_positions[Rx_idx][0]) / d
+        jacobian[1] = -(y - self.Rx_positions[Rx_idx][1]) / d
+        jacobian[2] = -c_0
+
+        return jacobian
+    
+
+    def error_aoa(self, estimate, Rx_idx):
+
+        x, y, _ = estimate
+        error = ((x - self.Rx_positions[Rx_idx][0]) * np.sin(self.first_aoas[Rx_idx]) - \
+                (y - self.Rx_positions[Rx_idx][1]) * np.cos(self.first_aoas[Rx_idx]))
+        return error
+
+    def error_aoa_jacobian(self, estimate, Rx_idx):
+
+        x, y, _ = estimate
+        jacobian = np.zeros(3)
+        jacobian[0] = np.sin(self.first_aoas[Rx_idx])
+        jacobian[1] = -np.cos(self.first_aoas[Rx_idx])
+        jacobian[2] = 0
+
+        return jacobian
+
+
+    def error_hybrid(self, estimate, Rx_idx):
+
+        error = self.error_toa(estimate, Rx_idx)**2 + self.error_aoa(estimate, Rx_idx)**2
+        
+        return error
+    
+
+    def error_hybrid_point(self, estimate, Rx_idx):
+
+        x, y, t0 = estimate
+        
+        toa = self.first_toas[Rx_idx] - t0
+        point = self.Rx_positions[Rx_idx] + \
+                toa * c_0 * np.array([np.cos(self.first_aoas[Rx_idx]), 
+                                        np.sin(self.first_aoas[Rx_idx])])
+        error = np.linalg.norm(point - np.array([x, y]))**2
+
+        return error
+    
+
+    def error_hybrid_second(self, estimate, prior, Rx_idx, toa, aoa):
+
+        x, y, t0 = estimate
+
+        # Identify wall
+        direct_aoa = np.arctan2(prior[1] - self.Rx_positions[Rx_idx][1], prior[0] - self.Rx_positions[Rx_idx][0])
+        wall = self.identify_wall(direct_aoa, aoa)
+
+        # Compute error 
+        error = 0
+        delta_t = toa - t0
+        if wall == 'vertical':
+            error += (self.Rx_positions[Rx_idx][1] + delta_t * c_0 * np.sin(aoa) - y)
+        elif wall == 'horizontal':
+            error += (self.Rx_positions[Rx_idx][0] + delta_t * c_0 * np.cos(aoa) - x)
+
+        return error
+    
+
+    def error_hybrid_second_jacobian(self, estimate, prior, Rx_idx, toa, aoa):
+
+        x, y, t0 = estimate
+
+        # Identify wall
+        direct_aoa = np.arctan2(prior[1] - self.Rx_positions[Rx_idx][1], prior[0] - self.Rx_positions[Rx_idx][0])
+        wall = self.identify_wall(direct_aoa, aoa)
+
+        jacobian = np.zeros(3)
+        delta_t = toa - t0
+        if wall == 'vertical':
+            jacobian[0] = 0
+            jacobian[1] = -1
+            jacobian[2] = -c_0 * np.sin(aoa)
+        elif wall == 'horizontal':
+            jacobian[0] = -1
+            jacobian[1] = 0
+            jacobian[2] = -c_0 * np.cos(aoa)
+
+        return jacobian
+    
+    
+    ### Mean Squared Error function for optimization ###
+
+    def mse_tdoa_star(self, estimate):
+        # MSE with 1 reference node (star configuration)
         cost = 0
         for tdoa in self.tdoas:
             distance = dist(estimate, tdoa.Rx1.position) - dist(estimate, tdoa.Rx2.position)
             cost += (tdoa.tdoa * 3e8 - distance)**2
 
-        for aoa in self.first_aoas:
-            cost += aoa.cost(estimate)**2
+        for i, aoa in enumerate(self.first_aoas):
+            if self.valid[i]:
+                cost += ((estimate[0] - self.Rx_positions[i][0]) * np.sin(aoa) - \
+                     (estimate[1] - self.Rx_positions[i][1]) * np.cos(aoa))**2
 
         return cost
     
 
-    def mse2(self, estimate):
-
+    def mse_tdoa_chain(self, estimate):
+        # MSE with chain configuration
+        x, y = estimate
         cost = 0
-        for i in range(len(self.Rxs)):
+        for i in range(len(self.Rx_positions)-1):
             if self.valid[i]:
-                distance = dist(estimate, self.Rxs[i].position) - dist(estimate, self.Rxs[(i+1) % len(self.Rxs)].position)
+                distance = dist(estimate, self.Rx_positions[i]) - dist(estimate, self.Rx_positions[(i+1) % len(self.Rx_positions)])
                 cost += ((self.first_toas[i] - self.first_toas[(i+1) % len(self.first_toas)]) * c_0 - distance)**2
-        for aoa in self.first_aoas:
-            cost += aoa.cost(estimate)**2
+        for i, aoa in enumerate(self.first_aoas):
+            if self.valid[i]:
+                cost += ((x - self.Rx_positions[i][0]) * np.sin(aoa) - \
+                     (y - self.Rx_positions[i][1]) * np.cos(aoa))**2
+
         return cost
 
+    
+    def mse(self, estimate, idx=None):
 
-    def mse_time(self, estimate):
+        cost = 0
+
+        if idx is None:
+             for i in range(len(self.Rx_positions)):
+                if self.valid[i]:
+                    cost += self.error_hybrid(estimate, i)
+
+        else:
+            for i in range(len(self.Rx_positions)):
+                if idx[i]:
+                    cost += self.error_hybrid(estimate, i)
+
+        return cost
+    
+
+    def residuals(self, estimate, idx=None):
+
+        res = []
+
+        if idx is None:
+             for i in range(len(self.Rx_positions)):
+                if self.valid[i]:
+                    res.append(self.error_toa(estimate, i))
+                    res.append(self.error_aoa(estimate, i))
+
+        else:
+            for i in range(len(self.Rx_positions)):
+                if idx[i]:
+                    res.append(self.error_toa(estimate, i))
+                    res.append(self.error_aoa(estimate, i))
+
+        return np.array(res)
+    
+
+    def residuals_jacobian(self, estimate, idx=None):
+
+        x, y, t0 = estimate
+        jacobian = []
+
+        if idx is None:
+             for i in range(len(self.Rx_positions)):
+                if self.valid[i]:
+                    jacobian.append(self.error_toa_jacobian(estimate, i))
+                    jacobian.append(self.error_aoa_jacobian(estimate, i))
+
+        else:
+            for i in range(len(self.Rx_positions)):
+                if idx[i]:
+                    jacobian.append(self.error_toa_jacobian(estimate, i))
+                    jacobian.append(self.error_aoa_jacobian(estimate, i))
+
+        return np.array(jacobian)
+    
+
+
+    def mse_second(self, estimate, prior, idx=None):
 
         x, y, t0 = estimate
         cost = 0
-        for i in range(len(self.Rxs)):
-            if self.valid[i]:
-                toa = self.first_toas[i] - t0
-                point = self.Rxs[i].position + \
-                        toa * c_0 * np.array([np.cos(self.first_aoas[i].angle), 
-                                              np.sin(self.first_aoas[i].angle)])
-                cost += np.linalg.norm(point - np.array([x, y]))**2
+        
+        if idx is None:
+            for i in range(len(self.Rx_positions)):
+                if self.valid[i]:
+                    if not self.first_used[i]: # Use first tap as if it is a second path
+                        cost += self.error_hybrid_second(estimate, prior, i, self.first_toas[i], self.first_aoas[i])**2
+
+                    for j in range(np.minimum(len(self.second_toas[i]), 2)):
+                        cost += self.error_hybrid_second(estimate, prior, i, self.second_toas[i][j], self.second_aoas[i][j])**2
+
+        else:
+            for i in range(len(self.Rx_positions)):
+                if self.valid[i]:
+                    if not self.first_used[i]: # Use first tap as if it is a second path
+                        cost += self.error_hybrid_second(estimate, prior, i, self.first_toas[i], self.first_aoas[i])**2
+
+                    for j in range(np.minimum(len(self.second_toas[i]), 2)):
+                        if idx[i][j]: # Select second path based on RANSAC inlier mask
+                            cost += self.error_hybrid_second(estimate, prior, i, self.second_toas[i][j], self.second_aoas[i][j])**2
 
         return cost
-
     
-    def mse_time2(self, estimate):
+
+    def residuals_second(self, estimate, prior, idx=None):
 
         x, y, t0 = estimate
-        cost = 0
-        for i in range(len(self.Rxs)):
-            if self.valid[i]:
-                toa = self.first_toas[i] - t0
-                cost += (toa * c_0 - dist(estimate[:2], self.Rxs[i].position))**2
-                cost += self.first_aoas[i].cost(estimate[:2])**2
-        return cost
+        res = []
+
+        if idx is None:
+            for i in range(len(self.Rx_positions)):
+                if self.valid[i]:
+                    if not self.first_used[i]: # Use first tap as if it is a second path
+                        res.append(self.error_hybrid_second(estimate, prior, i, self.first_toas[i], self.first_aoas[i]))
+
+                    for j in range(np.minimum(len(self.second_toas[i]), 2)):
+                        res.append(self.error_hybrid_second(estimate, prior, i, self.second_toas[i][j], self.second_aoas[i][j]))
+
+        else:
+            for i in range(len(self.Rx_positions)):
+                if self.valid[i]:
+                    for j in range(len(idx[i])):
+                        if idx[i][j]: # Select second path based on RANSAC inlier mask
+                            if j == 0: # Use first tap as if it is a second path
+                                res.append(self.error_hybrid_second(estimate, prior, i, self.first_toas[i], self.first_aoas[i]))
+                            else:
+                                res.append(self.error_hybrid_second(estimate, prior, i, self.second_toas[i][j-1], self.second_aoas[i][j-1]))
+        return np.array(res)
     
 
+    def residuals_second_jacobian(self, estimate, prior, idx=None):
 
-    def mse_second(self, prior, estimate):
+        x, y, t0 = estimate
+        jacobian = []
 
-        cost = 0
-        t0 = np.zeros(len(self.Rxs))
-        alpha0 = np.zeros(len(self.Rxs))
-        for i in range(len(self.Rxs)):
-            t0[i] = self.first_toas[i] - dist(prior, self.Rxs[i].position) / c_0
-            alpha0[i] = np.arctan2(prior[1] - self.Rxs[i].position[1], prior[0] - self.Rxs[i].position[0])
+        if idx is None:
+            for i in range(len(self.Rx_positions)):
+                if self.valid[i]:
+                    if not self.first_used[i]: # Use first tap as if it is a second path
+                        jacobian.append(self.error_hybrid_second_jacobian(estimate, prior, i, self.first_toas[i], self.first_aoas[i]))
 
-        for i in range(len(self.Rxs)):
-            if self.valid[i]:
-                for j in range(len(self.second_toas[i])):
-                    delta_t = self.second_toas[i][j] - t0[i]
-                    angle = self.second_aoas[i][j]
-                    wall = self.identify_wall(alpha0[i], angle)
-                    # print(f"Wall identified for Rx{i}: {wall}")
-                    if wall == 'vertical':
-                        cost += (self.Rxs[i].position[1] + delta_t * c_0 * np.sin(angle) - estimate[1])**2
-                    elif wall == 'horizontal':
-                        cost += (self.Rxs[i].position[0] + delta_t * c_0 * np.cos(angle) - estimate[0])**2
+                    for j in range(np.minimum(len(self.second_toas[i]), 2)):
+                        jacobian.append(self.error_hybrid_second_jacobian(estimate, prior, i, self.second_toas[i][j], self.second_aoas[i][j]))
 
-        return cost
-    
+        else:
+            for i in range(len(self.Rx_positions)):
+                if self.valid[i]:
+                    for j in range(len(idx[i])):
+                        if idx[i][j]: # Select second path based on RANSAC inlier mask
+                            if j == 0: # Use first tap as if it is a second path
+                                jacobian.append(self.error_hybrid_second_jacobian(estimate, prior, i, self.first_toas[i], self.first_aoas[i]))
+                            else:
+                                jacobian.append(self.error_hybrid_second_jacobian(estimate, prior, i, self.second_toas[i][j-1], self.second_aoas[i][j-1]))
+        return np.array(jacobian)
     
 
     def localize(self):
 
-        point = optimize.minimize(self.mse, self.initial_guess(), method='Nelder-Mead')
+        point = minimize(self.mse_tdoa_star, self.initial_guess(), method='Nelder-Mead')
 
         return point.x
     
-    def localize2(self):
 
-        point = optimize.minimize(self.mse2, self.initial_guess(), method='Nelder-Mead')
+    def localize_time(self, initial_guess=None):
 
-        return point.x
-    
-    def localize_time(self):
+        if initial_guess is None:
+            initial_guess = self.initial_guess(time=True)
 
-        point = optimize.minimize(self.mse_time, np.append(self.initial_guess(), -2e-8), method='Nelder-Mead')
+        point = least_squares(lambda x: self.residuals(x), initial_guess, 
+                              method='lm', jac=lambda x: self.residuals_jacobian(x))
 
         return point.x[:2], point.x[2]
     
-    
+
     def localize_with_second(self):
 
-        prior = self.localize_least_squares()
+        prior, t0 = self.localize_time()
 
-        point = optimize.minimize(lambda x:  self.mse_second(prior, x), prior, method='Nelder-Mead')
+        point = minimize(lambda x: self.mse(x) + self.mse_second(x), np.append(prior, t0), method='Nelder-Mead')
 
         return point.x
     
+
     def localize_iterative(self, max_iterations=10, tolerance=1e-6):
 
-        estimate = self.localize_least_squares()
+        estimate, t0 = self.localize_time()
+        estimate = np.append(estimate, t0)
 
         for _ in range(max_iterations):
-            prior = estimate
-            estimate = optimize.minimize(lambda x: self.mse(x) + self.mse_second(prior, x), prior, method='Nelder-Mead').x
-            if np.linalg.norm(estimate - prior) < tolerance:
+            estimate = minimize(lambda x:  self.mse(x) + self.mse_second(x), estimate, method='Nelder-Mead').x
+            if np.linalg.norm(estimate[:2] - estimate[:2]) < tolerance:
                 break
 
         return estimate
     
+
+
+    def localize_ransac(self, iter=10, threshold=1):
+
+        best_estimate = None
+        best_nb_inliers = 0
+        best_inliers = np.zeros_like(self.valid, dtype=bool)
+
+        # RANSAC
+        subset_size = 2
+        for _ in range(iter):
+            # Randomly select a subset of valid paths
+            inliers = np.zeros_like(self.valid, dtype=bool)
+            indices = np.where(self.valid)[0]
+            if len(indices) < subset_size:
+                raise ValueError("Not enough valid paths for RANSAC")
+            sample_indices = np.random.choice(indices, size=subset_size, replace=False)
+            inliers[sample_indices] = True
+            sample_estimate = least_squares(lambda x: self.residuals(x, idx=inliers), self.initial_guess(time=True), method='lm', jac=lambda x: self.residuals_jacobian(x, idx=inliers)).x
+
+            # Count inliers
+            nb_inliers = 0
+            
+            for i in indices:
+                if self.error_hybrid_point(sample_estimate, i) < threshold:
+                    inliers[i] = True
+                    nb_inliers += 1
+
+            # Update best estimate
+            if nb_inliers > best_nb_inliers:
+                best_nb_inliers = nb_inliers
+                best_inliers = inliers.copy()
+                best_estimate = sample_estimate
+
+        # Recompute estimate using all inliers
+        print("Best inliers after RANSAC:", best_inliers)
+        best_estimate = least_squares(lambda x: self.residuals(x, idx=best_inliers), best_estimate, 
+                                      method='lm', jac=lambda x: self.residuals_jacobian(x, idx=best_inliers)).x
+
+        return best_estimate[:2]
+    
+
+
+    def localize_all(self, iter=100, threshold=0.5):
+
+        best_estimate = None
+        best_nb_inliers = 0
+        best_inliers = np.zeros_like(self.valid, dtype=bool)
+
+        # RANSAC with first paths only
+        subset_size = 2
+        for _ in range(iter):
+            # Randomly select a subset of valid paths
+            inliers = np.zeros_like(self.valid, dtype=bool)
+            indices = np.where(self.valid)[0]
+            
+            if len(indices) < subset_size:
+                raise ValueError("Not enough valid paths for RANSAC")
+            sample_indices = np.random.choice(indices, size=subset_size, replace=False)
+            inliers[sample_indices] = True
+            sample_estimate = least_squares(lambda x: self.residuals(x, idx=inliers), self.initial_guess(time=True),
+                                            method='lm', jac=lambda x: self.residuals_jacobian(x, idx=inliers)).x
+
+            # Count inliers
+            nb_inliers = 0
+            inliers = np.zeros_like(self.valid, dtype=bool)
+            for i in indices:
+                if self.error_hybrid_point(sample_estimate, i) < threshold:
+                    inliers[i] = True
+                    nb_inliers += 1
+
+            # Update best estimate
+            if nb_inliers > best_nb_inliers:
+                best_nb_inliers = nb_inliers
+                best_inliers = inliers.copy()
+                best_estimate = sample_estimate
+
+        # Recompute estimate using all inliers
+        print("Best inliers after RANSAC:", best_inliers)
+        first_inliers = best_inliers.copy()
+        print("Best estimate after first RANSAC:", best_estimate)
+        best_estimate = least_squares(lambda x: self.residuals(x, idx=best_inliers), best_estimate, 
+                                      method='lm', jac=lambda x: self.residuals_jacobian(x, idx=best_inliers)).x
+
+        # Use second paths
+        initial_guess = best_estimate.copy()
+        
+        second_inliers = [np.array([False]*(len(self.second_toas[i])+1), dtype=bool) for i in range(len(self.Rx_positions))]
+
+        for i in range(len(self.Rx_positions)):
+            if self.valid[i]:
+                for j in range(len(self.second_toas[i])+1):
+                    if not (j == 0 and first_inliers[i]):
+                        if j == 0: # Use first tap as if it is a second path
+                            error = self.error_hybrid_second(best_estimate, initial_guess, i, self.first_toas[i], self.first_aoas[i])**2
+                        else:
+                            error = self.error_hybrid_second(best_estimate, initial_guess, i, self.second_toas[i][j-1], self.second_aoas[i][j-1])**2
+                        
+                        if error < threshold:
+                            second_inliers[i][j] = True
+                        
+        # Final estimate using all inliers
+        print("Second path inliers after first RANSAC:", second_inliers)
+        best_estimate = least_squares(lambda x: np.concatenate([self.residuals(x, idx=first_inliers), self.residuals_second(x, initial_guess, idx=second_inliers)], axis=0), initial_guess, 
+                                      method='lm', jac=lambda x: np.concatenate([self.residuals_jacobian(x, idx=first_inliers), self.residuals_second_jacobian(x, initial_guess, idx=second_inliers)], axis=0)).x
+
+        # best_estimate = None
+        # best_nb_inliers = 0
+        # for _ in range(iter):
+        #     inliers = [np.array([False]*(len(self.second_toas[i])+1), dtype=bool) for i in range(len(self.Rx_positions))]
+        #     for i in range(len(self.Rx_positions)):
+        #         if self.valid[i]:
+        #             for j in range(len(self.second_toas[i])+1):
+        #                 if not (j == 0 and first_inliers[i]):
+        #                     decision = np.random.rand()
+        #                     inliers[i][j] = decision < 0.3  # Randomly decide to include this path or not
+                        
+        #     # sample_estimate = least_squares(lambda x: self.residuals_second(x, initial_guess, idx=inliers), initial_guess,
+        #     #                                 method='lm', jac=lambda x: self.residuals_second_jacobian(x, initial_guess, idx=inliers)).x
+        #     sample_estimate = minimize(lambda x: self.mse(x, idx=first_inliers) + self.mse_second(x, initial_guess, idx=inliers), initial_guess, method='Nelder-Mead').x
+
+        #     # Count inliers
+        #     nb_inliers = 0
+        #     for i in range(len(self.Rx_positions)):
+        #         if self.valid[i]:
+        #             for j in range(len(self.second_toas[i])+1):
+        #                 if not (j == 0 and first_inliers[i]): 
+        #                     if j == 0: # Use first tap as if it is a second path
+        #                         error = self.error_hybrid_second(sample_estimate, initial_guess, i, self.first_toas[i], self.first_aoas[i])**2
+        #                     else:
+        #                         error = self.error_hybrid_second(sample_estimate, initial_guess, i, self.second_toas[i][j-1], self.second_aoas[i][j-1])**2
+        #                     if error < threshold*0.01:
+        #                         nb_inliers += 1
+        #                         inliers[i][j] = True
+        #                     else:
+        #                         inliers[i][j] = False
+
+        #     if nb_inliers > best_nb_inliers:
+        #         best_nb_inliers = nb_inliers
+        #         best_inliers = inliers.copy()
+        #         best_estimate = sample_estimate
+
+        # # Recompute estimate using all inliers
+        # print("Best second path inliers after RANSAC:", best_inliers)
+        # print("Best estimate after second RANSAC:", best_estimate)
+        # second_inliers = best_inliers
+        # # best_estimate = least_squares(lambda x: np.concatenate([self.residuals(x, idx=first_inliers), self.residuals_second(x, initial_guess, idx=second_inliers)], axis=0), initial_guess, 
+        # #                               method='lm', jac=lambda x: np.concatenate([self.residuals_jacobian(x, idx=first_inliers), self.residuals_second_jacobian(x, initial_guess, idx=second_inliers)], axis=0)).x
+        # best_estimate = minimize(lambda x: self.mse(x, idx=first_inliers) + self.mse_second(x, initial_guess, idx=second_inliers), initial_guess, method='Nelder-Mead').x
+
+        return best_estimate[:2]
+    
+
+
 
     def localize_least_squares(self):
 
