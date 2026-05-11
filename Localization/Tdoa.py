@@ -23,7 +23,7 @@ class Tdoa:
         self.Rx2 = Rx2
         self.tdoa = delay1 - delay2
         if np.abs(self.tdoa) > dist(Rx1.position, Rx2.position) / c_0:
-            raise ValueError("TDOA cannot be greater than the distance between receivers divided by the speed of light")
+            print("TDOA cannot be greater than the distance between receivers divided by the speed of light")
 
 
     
@@ -142,7 +142,7 @@ class TdoaLocalization:
         root1 = (-quad_b + np.sqrt(discriminant)) / (2*quad_a)
         root2 = (-quad_b - np.sqrt(discriminant)) / (2*quad_a)
 
-        print("Roots:", root1, root2)
+        # print("Roots:", root1, root2)
 
         # Choose the solution
         if root1 > 0 and root2 < 0:

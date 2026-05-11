@@ -256,7 +256,7 @@ def MUSIC_2D_spectrum(a, tau, B, fc=3.5e9, fft_size=512, T=1e-6, Tcir=2e-7, osr=
 
     # Autocorreleation matrix
     R = h_blocks.T @ h_blocks.conj() / N
-    print("R shape:", R.shape)
+    # print("R shape:", R.shape)
 
     # Eigenvalue decomposition
     eigenvalues, eigenvectors = np.linalg.eigh(R)
@@ -279,8 +279,8 @@ def MUSIC_2D_spectrum(a, tau, B, fc=3.5e9, fft_size=512, T=1e-6, Tcir=2e-7, osr=
         mdl[k] = -N * (L-k) * log_Lambda_ratio + 0.5 * k * (2*L - k) * np.log(N)
 
     k_opt = np.argmin(mdl)
-    print("Optimal number of paths:", k_opt)
-    print("Eigenvalues around the threshold:", eigenvalues[k_opt-3:k_opt+5])
+    # print("Optimal number of paths:", k_opt)
+    # print("Eigenvalues around the threshold:", eigenvalues[k_opt-3:k_opt+5])
 
     # Noise subspace
     U = eigenvectors[:, k_opt:]
@@ -317,7 +317,7 @@ def find_2D_peaks(spectrum, num_peaks):
     safe_spectrum = spectrum + np.random.uniform(0, 1e-10, size=spectrum.shape)
 
     # Find local maxima in the 2D spectrum
-    footprint = np.ones((7, 7))
+    footprint = np.ones((10, 5))
     mask = maximum_filter(safe_spectrum, footprint=footprint) == safe_spectrum
     peaks = np.argwhere(mask)
 
