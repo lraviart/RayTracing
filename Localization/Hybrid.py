@@ -520,8 +520,8 @@ class HybridLocalization:
         # Final estimate using all inliers
         # print("Second path inliers after first RANSAC:", second_inliers)
         if second_presence:
-            best_estimate = least_squares(lambda x: np.concatenate([self.residuals(x, idx=first_inliers), self.residuals_second(x, initial_guess, idx=second_inliers)], axis=0), initial_guess, 
-                                      method='lm', jac=lambda x: np.concatenate([self.residuals_jacobian(x, idx=first_inliers), self.residuals_second_jacobian(x, initial_guess, idx=second_inliers)], axis=0)).x
+            best_estimate = least_squares(lambda x: np.concatenate([self.residuals(x, idx=first_inliers), 2*self.residuals_second(x, initial_guess, idx=second_inliers)], axis=0), initial_guess, 
+                                      method='lm', jac=lambda x: np.concatenate([self.residuals_jacobian(x, idx=first_inliers), 2*self.residuals_second_jacobian(x, initial_guess, idx=second_inliers)], axis=0)).x
         else:
             best_estimate = least_squares(lambda x: self.residuals(x, idx=first_inliers), initial_guess, 
                                       method='lm', jac=lambda x: self.residuals_jacobian(x, idx=first_inliers)).x
@@ -574,7 +574,7 @@ class HybridLocalization:
     
 
 
-    def localize_iterative(self, iter=100, threshold=0.5):
+    def localize_iterative2(self, iter=100, threshold=0.5):
 
         # First estimate using RANSAC
         first_estimate, first_inliers = self.localize_ransac(iter=iter, threshold=threshold, final_output=False)
@@ -607,6 +607,61 @@ class HybridLocalization:
             else:
                 final_estimate = least_squares(lambda x: self.residuals(x, idx=first_inliers), initial_guess, 
                                         method='lm', jac=lambda x: self.residuals_jacobian(x, idx=first_inliers)).x
+
+            if np.linalg.norm(final_estimate[:2] - best_estimate[:2]) > tol:
+                best_estimate = final_estimate
+            else:
+                break
+
+        return best_estimate[:2]
+    
+
+    def localize_iterative(self, iter=100, threshold=0.5):
+
+        # First estimate using RANSAC
+        first_estimate, first_inliers = self.localize_ransac(iter=iter, threshold=threshold, final_output=False)
+
+        # Use second paths
+        initial_guess = first_estimate.copy()
+        second_inliers = [np.array([False]*(len(self.second_toas[i])+1), dtype=bool) for i in range(len(self.Rx_positions))]
+
+        best_estimate = first_estimate.copy()
+        tol = 1e-2
+        for _ in range(10):
+            first_presence = False
+            second_presence = False
+            for i in range(len(self.Rx_positions)):
+                if self.valid[i]:
+                    for j in range(len(self.second_toas[i])+1):
+                        if j == 0 and first_inliers[i]:
+                            error = self.error_hybrid_point(best_estimate, i)**2
+                            if error > threshold:
+                                first_inliers[i] = False
+                            else:
+                                first_presence = True
+
+                        if not (j == 0 and first_inliers[i]):
+                            if j == 0: # Use first tap as if it is a second path
+                                error = self.error_hybrid_second(best_estimate, best_estimate, i, self.first_toas[i], self.first_aoas[i])**2
+                            else:
+                                error = self.error_hybrid_second(best_estimate, best_estimate, i, self.second_toas[i][j-1], self.second_aoas[i][j-1])**2
+                            
+                            if error < threshold:
+                                second_inliers[i][j] = True
+                                second_presence = True
+                            
+            # Final estimate using all inliers
+            if first_presence and second_presence:
+                final_estimate = least_squares(lambda x: np.concatenate([self.residuals(x, idx=first_inliers), self.residuals_second(x, initial_guess, idx=second_inliers)], axis=0), initial_guess, 
+                                        method='lm', jac=lambda x: np.concatenate([self.residuals_jacobian(x, idx=first_inliers), self.residuals_second_jacobian(x, initial_guess, idx=second_inliers)], axis=0)).x
+            elif first_presence:
+                final_estimate = least_squares(lambda x: self.residuals(x, idx=first_inliers), initial_guess, 
+                                        method='lm', jac=lambda x: self.residuals_jacobian(x, idx=first_inliers)).x
+            elif second_presence:
+                final_estimate = least_squares(lambda x: self.residuals_second(x, initial_guess, idx=second_inliers), initial_guess, 
+                                        method='lm', jac=lambda x: self.residuals_second_jacobian(x, initial_guess, idx=second_inliers)).x
+            else:
+                break
 
             if np.linalg.norm(final_estimate[:2] - best_estimate[:2]) > tol:
                 best_estimate = final_estimate

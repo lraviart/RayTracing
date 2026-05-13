@@ -120,11 +120,11 @@ def MUSIC_spectrum_OFDM(B, fft_size, num_ofdm_symbols, a, tau, no=1e-12):
 
 def MUSIC_spectrum(a, tau, B, fft_size=512, T=1e-6, Tcir=2e-7, osr=8, alpha=0.1, num_pilots=10):
     
-    fft_size_ = int(fft_size) # * (1-2*alpha))
+    fft_size_ = int(fft_size) # * (1-alpha))
     h_hat = np.zeros((num_pilots, fft_size_), dtype=complex)
     for i in range(num_pilots):
         h_time = com.get_sc_cp_channel_response(a, tau, B, osr, T=T, Tcir=Tcir, fft_size=fft_size, alpha=alpha)[0]
-        h_hat[i] = np.fft.fftshift(np.fft.fft(h_time))# [int(fft_size*alpha):int(fft_size*alpha)+fft_size_]
+        h_hat[i] = np.fft.fftshift(np.fft.fft(h_time))# [int(fft_size*alpha/2):int(fft_size*alpha/2)+fft_size_]
 
     # Deconvolution 
     # frequencies = np.linspace(-B/2, B/2, fft_size)
@@ -169,7 +169,7 @@ def MUSIC_spectrum(a, tau, B, fft_size=512, T=1e-6, Tcir=2e-7, osr=8, alpha=0.1,
     k_opt = np.argmin(mdl)
     print("Optimal number of paths:", k_opt)
     # print("Eigenvalues:", eigenvalues[k_opt-5:k_opt+5])
-    # k_opt = 10
+    # k_opt = 4
 
     # Noise subspace
     U = eigenvectors[:, k_opt:]
@@ -235,15 +235,16 @@ def MUSIC_taps(spectrum, tau, df, K, h_hat):
 
 def MUSIC_2D_spectrum(a, tau, B, fc=3.5e9, fft_size=512, T=1e-6, Tcir=2e-7, osr=8, alpha=0.1, num_pilots=10):
 
-    fft_size_ = int(fft_size) # * (1-2*alpha))
+    fft_size_ = int((fft_size) * (1-alpha)) # Truncation to avoid the aliasing part
     num_rx_ant = a.shape[0]
     h_hat = np.zeros((num_pilots, num_rx_ant, fft_size_), dtype=complex)
     for i in range(num_pilots):
         for j in range(num_rx_ant):
             h_time = com.get_sc_cp_channel_response(a[j], tau, B, osr, T=T, Tcir=Tcir, fft_size=fft_size, alpha=alpha)[0]
-            h_hat[i, j] = np.fft.fftshift(np.fft.fft(h_time))# [int(fft_size*alpha):int(fft_size*alpha)+fft_size_]
+            h_hat[i, j] = np.fft.fftshift(np.fft.fft(h_time))[int(fft_size*alpha/2):int(fft_size*alpha/2)+fft_size_]
 
-    
+    # print("com part done")
+
     ### MUSIC algorithm
     M = fft_size_ // 2 # Size of subblocks
     N_sym = fft_size_ - M + 1
@@ -290,6 +291,9 @@ def MUSIC_2D_spectrum(a, tau, B, fc=3.5e9, fft_size=512, T=1e-6, Tcir=2e-7, osr=
     angles = np.linspace(-np.pi/2, np.pi/2, 180)
     freq = np.arange(M) * (B/fft_size)
 
+    if k_opt == 0: # No paths detected, return empty spectrum
+        return np.zeros((len(angles), len(tau))), tau, angles, k_opt, h_hat
+
     # Broadcasting
     tau_grid = tau[None, :, None, None]                 # Shape: (1, len(tau), 1, 1)
     angles_grid = angles[:, None, None, None]           # Shape: (len(angles), 1, 1, 1)
@@ -302,7 +306,7 @@ def MUSIC_2D_spectrum(a, tau, B, fc=3.5e9, fft_size=512, T=1e-6, Tcir=2e-7, osr=
 
     # Projection of steering vectors onto the noise subspace
     proj = np.sum(np.abs(a @ U.conj())**2, axis=1) # (len(angles) * len(tau), L-k_opt)
-
+    
     # Calculate P and reshape it back to the 2D grid shape
     P = (1 / proj).reshape(len(angles), len(tau)).T
 
@@ -317,8 +321,8 @@ def find_2D_peaks(spectrum, num_peaks):
     safe_spectrum = spectrum + np.random.uniform(0, 1e-10, size=spectrum.shape)
 
     # Find local maxima in the 2D spectrum
-    footprint = np.ones((10, 5))
-    mask = maximum_filter(safe_spectrum, footprint=footprint) == safe_spectrum
+    footprint = np.ones((5, 5))
+    mask = maximum_filter(safe_spectrum, footprint=footprint, mode='wrap') == safe_spectrum
     peaks = np.argwhere(mask)
 
     # Select top peaks

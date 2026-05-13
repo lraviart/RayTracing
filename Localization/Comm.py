@@ -160,23 +160,24 @@ def get_sc_channel_response(a, tau, B, osr, T=1e-6, Tcir=2e-7, alpha=0.5):
     Fs = osr * B
     Ts = 1 / Fs
     N = int(T / Ts) # Total number of samples
-    L = int(Tcir * B) # Length of the channel impulse response in samples
-    N_ext = 2 * N
-    t = np.linspace(-N*Ts, N*Ts, N_ext, endpoint=False) # Time array centered around zero
-    print("L:", L, "N:", N, "N_ext:", N_ext)
+    L = int(Tcir * B) # Length of the channel impulse response in symbols
+    span = 40 # Number of symbols to span the pulse shape
+    D = span * osr # Number of samples to span the pulse shape
+    t = np.linspace(-D//2*Ts, D//2*Ts, D+1) # Time array (odd length)
+    t_channel = np.linspace(-D//2*Ts, (D//2+L*osr)*Ts, D+L*osr+1) # Time array (odd length)
+
     # Channel in time domain, already convolved with the pulse shape
-    h_time = cir_to_sc_channel(a, tau, B, t, alpha)
+    h_time = cir_to_sc_channel(a, tau, B, t_channel, alpha)
 
     # Pilots
     pilot_length = 2 * L - 1
     pilot_seq = zadoff_chu_seq(23, pilot_length)
 
-    t0_idx = N # Find the index corresponding to t=0
-    x = np.zeros(N_ext, dtype=complex)
-    x[t0_idx:t0_idx+pilot_length*osr:osr] = pilot_seq # Place the pilot
+    x = np.zeros(N, dtype=complex)
+    x[:pilot_length*osr:osr] = pilot_seq # Place the pilot
 
     # Convolution with the channel
-    y = np.convolve(x, h_time, mode='full')[t0_idx:t0_idx+N_ext]
+    y = np.convolve(x, h_time, mode='full')
 
     # Add noise
     no = 1.38e-23 * 290 * B * osr # Noise power (k*T*B)
@@ -184,22 +185,18 @@ def get_sc_channel_response(a, tau, B, osr, T=1e-6, Tcir=2e-7, alpha=0.5):
 
     y = y + np.sqrt(no) * noise
 
-    print("Noise power:", np.mean(np.abs(np.sqrt(no) * noise)**2))
-    noise_filtered = np.convolve(np.sqrt(no) * noise, RRC(t, 0, B, alpha), mode='full')[t0_idx:t0_idx+N] / osr
-    print("Filtered noise power:", np.mean(np.abs(noise_filtered)**2))
-
     # Matched filtering
-    u_matched = RRC(t, 0, B, alpha) # Matched filter is the same as the pulse shape
-    r = np.convolve(y, u_matched, mode='full')[t0_idx:t0_idx+N_ext] / osr
+    u_matched = RRC(t, 0, B, alpha) # Matched filter
+    r = np.convolve(y, u_matched, mode='full') / osr
 
     # Synchronisation and Resampling to symbol rate 
-    r = r[N:] # Remove the buffer time
+    r = r[D-1:D-1+N] # Filter delay = 2 * (D-1)/2 = D-1
     r = r[::osr]
 
     # Channel estimation (using the known pilot)
     h_hat = estimate_sc_channel(r, pilot_seq, L=L)
 
-    return h_hat, t, h_time
+    return h_hat, t_channel, h_time
 
 
 #######################
@@ -236,53 +233,46 @@ def get_sc_cp_channel_response(a, tau, B, osr, T=1e6, Tcir=2e-7, fft_size=512, a
     Ts = 1 / Fs
     N = int(T / Ts) # Total number of samples
     L = int(Tcir * B) # Length of the channel impulse response in samples
-    N_ext = 2 * N
-    t = np.linspace(-N*Ts, N*Ts, N_ext, endpoint=False) # Time array centered around zero
+    span = 40 # Number of symbols to span the pulse shape
+    D = span * osr + 1 # Number of samples to span the pulse shape
+    t = np.linspace(-(D-1)//2*Ts, (D-1)//2*Ts, D) # Time array (odd length)
+    t_channel = np.linspace(-(D-1)//2*Ts, (D-1)//2*Ts + (L*osr)*Ts, D+L*osr) # Time array (odd length)
 
     # Channel in time domain, already convolved with the pulse shape
-    h_time = cir_to_sc_channel(a, tau, B, t, alpha)
+    h_time = cir_to_sc_channel(a, tau, B, t_channel, alpha)
 
     # Pilots
     pilot_length = fft_size
     pilot_seq = zadoff_chu_seq(23, pilot_length)
     prefixed_pilot_length = pilot_length + L # Account for cyclic prefix
     prefixed_pilot_seq = np.concatenate((pilot_seq[-L:], pilot_seq)) # Add cyclic prefix
-    t0_idx = N # Find the index corresponding to t=0
-    x = np.zeros(N_ext, dtype=complex)
-    x[t0_idx:t0_idx+prefixed_pilot_length*osr:osr] = prefixed_pilot_seq # Place the prefixed pilot
+    x = np.zeros(N, dtype=complex)
+    x[:prefixed_pilot_length*osr:osr] = prefixed_pilot_seq # Place the prefixed pilot
 
 
     # Convolution with the channel
-    y = np.convolve(x, h_time, mode='full')[t0_idx:t0_idx+N_ext]
+    y = np.convolve(x, h_time, mode='full')
 
     # Add noise
     no = 1.38e-23 * 290 # Noise power spectral density (k*T)
-    sigma_n = no * B * osr * 1e0 # Noise power (k*T*B)
+    sigma_n = no * B * osr * 1e-4 # Noise power (k*T*B)
     sigma_n *= 10**(10/10) # Add 10 dB Noise Figure
     noise = np.random.normal(size=y.shape) + 1j * np.random.normal(size=y.shape)
 
-    # print("Signal energy:", np.sum(np.abs(y)**2))
-    # signal_filtered = np.convolve(y, RRC(t, 0, B, alpha), mode='full')[t0_idx:t0_idx+N_ext] / osr
-    # print("Filtered signal energy:", np.sum(np.abs(signal_filtered)**2))
-
     y = y + np.sqrt(sigma_n/2) * noise
-
-    # print("Noise power:", np.mean(np.abs(np.sqrt(sigma_n/2) * noise)**2))
-    # noise_filtered = np.convolve(np.sqrt(sigma_n/2) * noise, RRC(t, 0, B, alpha), mode='full')[t0_idx:t0_idx+N_ext] / osr
-    # print("Filtered noise power:", np.mean(np.abs(noise_filtered)**2))
-
+   
     # Matched filtering
     u_matched = RRC(t, 0, B, alpha) # Matched filter is the same as the pulse shape
-    r = np.convolve(y, u_matched, mode='full')[t0_idx:t0_idx+N_ext] / osr
+    r = np.convolve(y, u_matched, mode='full') / osr
 
     # Synchronisation and Resampling to symbol rate 
-    r = r[N:] # Remove the buffer time
+    r = r[D-1:D-1+N] # Remove the buffer time
     r = r[::osr]
 
     # Channel estimation (using the known pilot)
     h_hat = estimate_sc_cp_channel(r, pilot_seq, L=L)
 
-    return h_hat, t, h_time
+    return h_hat, t_channel, h_time
 
 
 
