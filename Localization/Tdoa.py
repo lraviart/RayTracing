@@ -22,8 +22,6 @@ class Tdoa:
         self.Rx1 = Rx1
         self.Rx2 = Rx2
         self.tdoa = delay1 - delay2
-        if np.abs(self.tdoa) > dist(Rx1.position, Rx2.position) / c_0:
-            print("TDOA cannot be greater than the distance between receivers divided by the speed of light")
 
 
     

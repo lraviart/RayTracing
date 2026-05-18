@@ -287,7 +287,7 @@ def MUSIC_2D_spectrum(a, tau, B, fc=3.5e9, fft_size=512, T=1e-6, Tcir=2e-7, osr=
     U = eigenvectors[:, k_opt:]
 
     # MUSIC spectrum
-    tau = np.linspace(0, Tcir, 1000)
+    tau = np.linspace(0, Tcir, 200)
     angles = np.linspace(-np.pi/2, np.pi/2, 180)
     freq = np.arange(M) * (B/fft_size)
 
