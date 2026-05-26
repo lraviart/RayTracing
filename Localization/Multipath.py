@@ -120,11 +120,11 @@ def MUSIC_spectrum_OFDM(B, fft_size, num_ofdm_symbols, a, tau, no=1e-12):
 
 def MUSIC_spectrum(a, tau, B, fft_size=512, T=1e-6, Tcir=2e-7, osr=8, alpha=0.1, num_pilots=10):
     
-    fft_size_ = int(fft_size) # * (1-alpha))
+    fft_size_ = int(fft_size * (1-alpha))
     h_hat = np.zeros((num_pilots, fft_size_), dtype=complex)
     for i in range(num_pilots):
         h_time = com.get_sc_cp_channel_response(a, tau, B, osr, T=T, Tcir=Tcir, fft_size=fft_size, alpha=alpha)[0]
-        h_hat[i] = np.fft.fftshift(np.fft.fft(h_time))# [int(fft_size*alpha/2):int(fft_size*alpha/2)+fft_size_]
+        h_hat[i] = np.fft.fftshift(np.fft.fft(h_time))[int(fft_size*alpha/2):int(fft_size*alpha/2)+fft_size_]
 
     # Deconvolution 
     # frequencies = np.linspace(-B/2, B/2, fft_size)

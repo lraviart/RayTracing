@@ -36,7 +36,7 @@ class HybridLocalization:
                 self.first_aoas[i] = global_angle(aoas[i][0], self.Rx_orientations[i])
                 self.second_toas[i] = toas[i][1:]
                 self.second_aoas[i] = global_angle(aoas[i][1:], self.Rx_orientations[i])
-
+                
         # Find reference delay
         if ref_index is not None:
             if not self.valid[ref_index]:
@@ -132,9 +132,9 @@ class HybridLocalization:
                 return 'vertical'
         elif first_sector == 4:
             if second_sector == 1:
-                return 'vertical'
-            elif second_sector == 3:
                 return 'horizontal'
+            elif second_sector == 3:
+                return 'vertical'
 
         return None  # No wall identified
     
@@ -149,7 +149,7 @@ class HybridLocalization:
     def error_toa(self, estimate, Rx_idx):
 
         x, y, t0 = estimate
-        error = ((self.first_toas[Rx_idx] - t0) * c_0 - dist([x, y], self.Rx_positions[Rx_idx]))
+        error = (dist([x, y], self.Rx_positions[Rx_idx]) - (self.first_toas[Rx_idx] - t0) * c_0)
     
         return error
     
@@ -162,9 +162,9 @@ class HybridLocalization:
              jacobian[0] = 0
              jacobian[1] = 0
         else:
-            jacobian[0] = -(x - self.Rx_positions[Rx_idx][0]) / d
-            jacobian[1] = -(y - self.Rx_positions[Rx_idx][1]) / d
-        jacobian[2] = -c_0
+            jacobian[0] = (x - self.Rx_positions[Rx_idx][0]) / d
+            jacobian[1] = (y - self.Rx_positions[Rx_idx][1]) / d
+        jacobian[2] = c_0
 
         return jacobian
     
@@ -218,10 +218,37 @@ class HybridLocalization:
         # Compute error 
         error = 0
         delta_t = toa - t0
+        epsilon = 1e-3
         if wall == 'vertical':
-            error += (self.Rx_positions[Rx_idx][1] + delta_t * c_0 * np.sin(aoa) - y)
+            y_ref = self.Rx_positions[Rx_idx][1] + delta_t * c_0 * np.sin(aoa)
+            x_limit1 = self.Rx_positions[Rx_idx][0] + delta_t * c_0 * np.cos(aoa)
+            x_limit2 = self.Rx_positions[Rx_idx][0] - delta_t * c_0 * np.cos(aoa)
+            # Order the limits
+            if x_limit1 > x_limit2:
+                x_limit1, x_limit2 = x_limit2, x_limit1
+            # Type of error
+            if x_limit1 <= x <= x_limit2:
+                error += np.sqrt((y - y_ref)**2 + epsilon**2)
+            elif x < x_limit1:
+                error += np.sqrt((x - x_limit1)**2 + (y - y_ref)**2 + epsilon**2)
+            else:
+                error += np.sqrt((x - x_limit2)**2 + (y - y_ref)**2 + epsilon**2)
+
         elif wall == 'horizontal':
-            error += (self.Rx_positions[Rx_idx][0] + delta_t * c_0 * np.cos(aoa) - x)
+            x_ref = self.Rx_positions[Rx_idx][0] + delta_t * c_0 * np.cos(aoa)
+            y_limit1 = self.Rx_positions[Rx_idx][1] + delta_t * c_0 * np.sin(aoa)
+            y_limit2 = self.Rx_positions[Rx_idx][1] - delta_t * c_0 * np.sin(aoa)
+            # Order the limits
+            if y_limit1 > y_limit2:
+                y_limit1, y_limit2 = y_limit2, y_limit1
+            # Type of error
+            if y_limit1 <= y <= y_limit2:
+                error += np.sqrt((x - x_ref)**2 + epsilon**2)
+            elif y < y_limit1:
+                # print(f"it happened, value of y_limit1: {y_limit1}, value of angle: {aoa}")
+                error += np.sqrt((x - x_ref)**2 + (y - y_limit1)**2 + epsilon**2)
+            else:
+                error += np.sqrt((x - x_ref)**2 + (y - y_limit2)**2 + epsilon**2)
 
         return error
     
@@ -236,14 +263,66 @@ class HybridLocalization:
 
         jacobian = np.zeros(3)
         delta_t = toa - t0
+        epsilon = 1e-3
         if wall == 'vertical':
-            jacobian[0] = 0
-            jacobian[1] = -1
-            jacobian[2] = -c_0 * np.sin(aoa)
+            y_ref = self.Rx_positions[Rx_idx][1] + delta_t * c_0 * np.sin(aoa)
+            x_limit1 = self.Rx_positions[Rx_idx][0] + delta_t * c_0 * np.cos(aoa)
+            x_limit2 = self.Rx_positions[Rx_idx][0] - delta_t * c_0 * np.cos(aoa)
+            switch = False
+            # Order the limits
+            if x_limit1 > x_limit2:
+                switch = True
+                x_limit1, x_limit2 = x_limit2, x_limit1
+            # Type of error
+            if x_limit1 <= x <= x_limit2:
+                jacobian[0] = 0
+                jacobian[1] = 1
+                jacobian[2] = c_0 * np.sin(aoa)
+            elif x < x_limit1:
+                jacobian[0] = (x - x_limit1) / np.sqrt((x - x_limit1)**2 + (y - y_ref)**2 + epsilon**2)
+                jacobian[1] = (y - y_ref) / np.sqrt((x - x_limit1)**2 + (y - y_ref)**2 + epsilon**2)
+                if not switch:
+                    jacobian[2] = c_0 * ((x - x_limit1)*np.cos(aoa) + (y - y_ref)*np.sin(aoa)) / np.sqrt((x - x_limit1)**2 + (y - y_ref)**2 + epsilon**2)
+                else:
+                    jacobian[2] = c_0 * (-(x - x_limit1)*np.cos(aoa) + (y - y_ref)*np.sin(aoa)) / np.sqrt((x - x_limit1)**2 + (y - y_ref)**2 + epsilon**2)
+            else:
+                jacobian[0] = (x - x_limit2) / np.sqrt((x - x_limit2)**2 + (y - y_ref)**2 + epsilon**2)
+                jacobian[1] = (y - y_ref) / np.sqrt((x - x_limit2)**2 + (y - y_ref)**2 + epsilon**2)
+                if not switch:
+                    jacobian[2] = c_0 * (-(x - x_limit2)*np.cos(aoa) + (y - y_ref)*np.sin(aoa)) / np.sqrt((x - x_limit2)**2 + (y - y_ref)**2 + epsilon**2)
+                else:
+                    jacobian[2] = c_0 * ((x - x_limit2)*np.cos(aoa) + (y - y_ref)*np.sin(aoa)) / np.sqrt((x - x_limit2)**2 + (y - y_ref)**2 + epsilon**2)
+
+
         elif wall == 'horizontal':
-            jacobian[0] = -1
-            jacobian[1] = 0
-            jacobian[2] = -c_0 * np.cos(aoa)
+            x_ref = self.Rx_positions[Rx_idx][0] + delta_t * c_0 * np.cos(aoa)
+            y_limit1 = self.Rx_positions[Rx_idx][1] + delta_t * c_0 * np.sin(aoa)
+            y_limit2 = self.Rx_positions[Rx_idx][1] - delta_t * c_0 * np.sin(aoa)
+            switch = False
+            # Order the limits
+            if y_limit1 > y_limit2:
+                switch = True
+                y_limit1, y_limit2 = y_limit2, y_limit1
+            # Type of error
+            if y_limit1 <= y <= y_limit2:
+                jacobian[0] = 1
+                jacobian[1] = 0
+                jacobian[2] = c_0 * np.cos(aoa)
+            elif y < y_limit1:
+                jacobian[0] = (x - x_ref) / np.sqrt((x - x_ref)**2 + (y - y_limit1)**2 + epsilon**2)
+                jacobian[1] = (y - y_limit1) / np.sqrt((x - x_ref)**2 + (y - y_limit1)**2 + epsilon**2)
+                if not switch:
+                    jacobian[2] = c_0 * ((x - x_ref)*np.sin(aoa) - (y - y_limit1)*np.cos(aoa)) / np.sqrt((x - x_ref)**2 + (y - y_limit1)**2 + epsilon**2)
+                else:
+                    jacobian[2] = c_0 * (-(x - x_ref)*np.sin(aoa) - (y - y_limit1)*np.cos(aoa)) / np.sqrt((x - x_ref)**2 + (y - y_limit1)**2 + epsilon**2)
+            else:
+                jacobian[0] = (x - x_ref) / np.sqrt((x - x_ref)**2 + (y - y_limit2)**2 + epsilon**2)
+                jacobian[1] = (y - y_limit2) / np.sqrt((x - x_ref)**2 + (y - y_limit2)**2 + epsilon**2)
+                if not switch:
+                    jacobian[2] = c_0 * (-(x - x_ref)*np.sin(aoa) + (y - y_limit2)*np.cos(aoa)) / np.sqrt((x - x_ref)**2 + (y - y_limit2)**2 + epsilon**2)
+                else:
+                    jacobian[2] = c_0 * ((x - x_ref)*np.sin(aoa) + (y - y_limit2)*np.cos(aoa)) / np.sqrt((x - x_ref)**2 + (y - y_limit2)**2 + epsilon**2)
+
 
         return jacobian
     
@@ -549,7 +628,7 @@ class HybridLocalization:
 
         # Iteratively refine estimate using RANSAC with second paths
         best_estimate = first_estimate
-        subset_size = 4
+        subset_size = 3
         tol = 1e-5
 
         # Each candidate is a tuple: (rx_index, path_type, path_index, num_residuals)
@@ -582,31 +661,6 @@ class HybridLocalization:
                 second_inliers = [np.array([False]*(len(self.second_toas[i])+1), dtype=bool) for i in range(len(self.Rx_positions))]
                 first_presence = False
                 second_presence = False
-
-                # Randomly select a subset of first and second paths
-                # nb_paths = len(self.valid) + sum([len(self.second_toas[i]) for i in range(len(self.Rx_positions)) if self.valid[i]])
-                # indices = np.arange(nb_paths)
-                # indices = np.delete(indices, np.where(~self.valid)[0]) # Remove invalid first paths
-                # if len(indices) < subset_size:
-                #     print(self.valid)
-                #     print("Not enough valid paths for RANSAC iteration")
-                #     return best_estimate[:2]
-                # sample_indices = np.random.choice(indices, size=subset_size, replace=False)
-                # for idx in sample_indices:
-                #     if idx < len(self.valid):
-                #         if self.valid[idx]:
-                #             first_inliers[idx] = True
-                #             first_presence = True
-                #     else:
-                #         idx -= len(self.valid)
-                #         for i in range(len(self.Rx_positions)):
-                #             if self.valid[i]:
-                #                 if idx < len(self.second_toas[i]):
-                #                     second_inliers[i][idx] = True
-                #                     second_presence = True
-                #                     break
-                #                 else:
-                #                     idx -= len(self.second_toas[i])
 
                 # --- STRICT LOGIC: Construct the sample step-by-step ---
                 
@@ -690,7 +744,7 @@ class HybridLocalization:
                                 error = self.error_hybrid_second(estimate, best_estimate, i, self.first_toas[i], self.first_aoas[i])**2
                             else:
                                 error = self.error_hybrid_second(estimate, best_estimate, i, self.second_toas[i][j-1], self.second_aoas[i][j-1])**2
-                            if error < threshold and not (j == 0 and inliers_first[i]):
+                            if error < threshold/2 and not (j == 0 and inliers_first[i]):
                                 inliers_second[i][j] = True
                                 inliers_second_presence = True
                                 nb_inliers += 1
@@ -714,7 +768,7 @@ class HybridLocalization:
                     ransac_second_presence = inliers_second_presence
 
             # Final estimate using all inliers
-            print("Ransac iteration: nb_inliers =", ransac_nb_inliers)
+            # print("Ransac iteration: nb_inliers =", ransac_nb_inliers)
             final_estimate = None
             if ransac_first_presence and ransac_second_presence and ransac_nb_inliers >= 2:
                 final_estimate = least_squares(lambda x: np.concatenate([self.residuals(x, idx=ransac_first_inliers), self.residuals_second(x, ransac_estimate, idx=ransac_second_inliers)], axis=0), ransac_estimate, 
