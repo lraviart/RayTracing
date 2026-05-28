@@ -501,48 +501,28 @@ class HybridLocalization:
     ### Localization methods ###
     ############################
 
-    def localize(self):
+    def localize_tdoa(self):
 
         point = minimize(self.mse_tdoa_star, self.initial_guess(), method='Nelder-Mead')
 
         return point.x
     
 
-    def localize_time(self, initial_guess=None):
+    def localize(self, initial_guess=None):
 
         if initial_guess is None:
             initial_guess = self.initial_guess(time=True)
+        
+        if np.sum(self.valid) < 2:
+            return np.array([np.nan, np.nan])
 
         point = least_squares(lambda x: self.residuals(x), initial_guess, 
                               method='lm', jac=lambda x: self.residuals_jacobian(x))
-
-        return point.x[:2], point.x[2]
-    
-
-    def localize_with_second(self):
-
-        prior, t0 = self.localize_time()
-
-        point = minimize(lambda x: self.mse(x) + self.mse_second(x), np.append(prior, t0), method='Nelder-Mead')
-
-        return point.x
-    
-
-    def localize_iterative(self, max_iterations=10, tolerance=1e-6):
-
-        estimate, t0 = self.localize_time()
-        estimate = np.append(estimate, t0)
-
-        for _ in range(max_iterations):
-            estimate = minimize(lambda x:  self.mse(x) + self.mse_second(x), estimate, method='Nelder-Mead').x
-            if np.linalg.norm(estimate[:2] - estimate[:2]) < tolerance:
-                break
-
-        return estimate
-    
+        
+        return point.x[:2]
 
 
-    def localize_ransac(self, iter=10, threshold=1, final_output=True):
+    def localize_ransac(self, iter=50, threshold=0.25, final_output=True):
 
         best_estimate = None
         best_nb_inliers = -1
@@ -555,7 +535,7 @@ class HybridLocalization:
             inliers = np.zeros_like(self.valid, dtype=bool)
             indices = np.where(self.valid)[0]
             if len(indices) < subset_size:
-                raise ValueError("Not enough valid paths for RANSAC")
+                continue
             sample_indices = np.random.choice(indices, size=subset_size, replace=False)
             inliers[sample_indices] = True
             sample_estimate = least_squares(lambda x: self.residuals(x, idx=inliers), self.initial_guess(time=True), method='lm', jac=lambda x: self.residuals_jacobian(x, idx=inliers)).x
@@ -575,8 +555,12 @@ class HybridLocalization:
                 best_estimate = sample_estimate
 
         # Recompute estimate using all inliers
-        best_estimate = least_squares(lambda x: self.residuals(x, idx=best_inliers), best_estimate, 
+        if best_estimate is not None:
+            best_estimate = least_squares(lambda x: self.residuals(x, idx=best_inliers), best_estimate, 
                                       method='lm', jac=lambda x: self.residuals_jacobian(x, idx=best_inliers)).x
+        else: # Try to localize with classic hybrid
+            best_estimate = self.localize()
+        
 
         if final_output:
             return best_estimate[:2]
@@ -621,12 +605,18 @@ class HybridLocalization:
     
 
 
-    def localize_iterative2(self, iter=10, ransac_iter=50, threshold=0.5):
+    def localize_ransac_fo(self, iter=10, ransac_iter=50, threshold=0.5):
 
         # First estimate using RANSAC
         first_estimate, first_inliers = self.localize_ransac(iter=ransac_iter, threshold=threshold, final_output=False)
 
         # Iteratively refine estimate using RANSAC with second paths
+        if np.isnan(first_estimate).any():
+            first_estimate = self.localize()
+
+        if np.isnan(first_estimate).any():
+            return np.array([np.nan, np.nan])
+
         best_estimate = first_estimate
         subset_size = 3
         tol = 1e-5

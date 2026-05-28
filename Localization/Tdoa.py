@@ -39,6 +39,7 @@ class TdoaLocalization:
             self.valid = [True if first_toas[i] > 0 else False for i in range(len(first_toas))]
 
         self.first_toas = first_toas
+        self.Rx_positions = RX_positions
 
         # Find reference delay
         if ref_index is not None:
@@ -95,6 +96,15 @@ class TdoaLocalization:
         return guess
 
 
+    
+    
+    def error_toa(self, estimate, Rx_idx):
+
+        x, y, t0 = estimate
+        error = (dist([x, y], self.Rx_positions[Rx_idx]) - (self.first_toas[Rx_idx] - t0) * c_0)
+    
+        return error
+    
     def mse_function(self, guess):
         cost = 0
         for tdoa in self.tdoas:
@@ -102,15 +112,27 @@ class TdoaLocalization:
             cost += (tdoa.tdoa * c_0 - distance)**2
         return cost
     
+    def mse_function2(self, guess):
+
+        cost = 0 
+        for i in range(len(self.first_toas)):
+            if self.valid[i]:
+                cost += self.error_toa(guess, i)**2
+        return cost
 
     def localize(self):
 
-        point = optimize.minimize(fun=self.mse_function, x0=self.initial_guess(), args=(), method='Nelder-Mead')
+        if len(self.tdoas) < 2:
+            return np.array([np.nan, np.nan])  # Not enough TDOAs to localize
+        point = optimize.minimize(fun=self.mse_function2, x0=np.concatenate([self.initial_guess(), [np.min([self.first_toas[i] for i in range(len(self.first_toas)) if self.valid[i]])]]), args=(), method='Nelder-Mead')
 
-        return point.x
+        return point.x[:2]
     
 
     def localize_least_squares(self):
+
+        if len(self.tdoas) < 2:
+            return np.array([np.nan, np.nan])  # Not enough TDOAs to localize
 
         A = np.zeros((len(self.tdoas), 2))
         b = np.zeros(len(self.tdoas))
@@ -135,7 +157,7 @@ class TdoaLocalization:
         quad_c = -u.T @ u
         discriminant = quad_b**2 - 4*quad_a*quad_c
         if discriminant < 0:
-            raise ValueError("No solution found")
+            return np.array([np.nan, np.nan])  # No solution found
         
         root1 = (-quad_b + np.sqrt(discriminant)) / (2*quad_a)
         root2 = (-quad_b - np.sqrt(discriminant)) / (2*quad_a)
@@ -156,7 +178,7 @@ class TdoaLocalization:
             else:
                 solution = solution2
         else:
-            raise ValueError("No valid solution found")
+            solution = np.array([np.nan, np.nan])  # No valid solution found
         
         return solution
     

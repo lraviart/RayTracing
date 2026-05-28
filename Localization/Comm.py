@@ -255,7 +255,7 @@ def get_sc_cp_channel_response(a, tau, B, osr, T=1e6, Tcir=2e-7, fft_size=512, a
 
     # Add noise
     no = 1.38e-23 * 290 # Noise power spectral density (k*T)
-    sigma_n = 2*no * B * osr * 1e-3 # Noise power (k*T*B)
+    sigma_n = 2*no * B * osr * 1e0 # Noise power (k*T*B)
     sigma_n *= 10**(10/10) # Add 10 dB Noise Figure
     noise = np.random.normal(size=y.shape) + 1j * np.random.normal(size=y.shape)
 
