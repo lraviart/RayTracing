@@ -288,7 +288,7 @@ def MUSIC_2D_spectrum(a, tau, B, fc=3.5e9, fft_size=512, T=1e-6, Tcir=2e-7, osr=
 
     # MUSIC spectrum
     tau = np.linspace(0, Tcir, 200)
-    angles = np.linspace(-np.pi/2, np.pi/2, 180)
+    angles = np.linspace(-np.pi, np.pi, 180)
     freq = np.arange(M) * (B/fft_size)
 
     if k_opt == 0: # No paths detected, return empty spectrum
