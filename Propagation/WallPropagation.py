@@ -47,6 +47,7 @@ c_concrete = 0.0462
 d_concrete = 0.7822
 frequencies = np.linspace(1e9, 30e9, 100)
 z = 0.2
+print(c_concrete*3.5**d_concrete)
 
 if True:
     plt.figure(figsize=(8, 6))
@@ -59,7 +60,7 @@ if True:
     plt.xticks(np.arange(0, 31, 5))
     plt.yticks(np.arange(-120, 1, 20))
     plt.grid()
-    plt.savefig("concrete_attenuation.pdf", bbox_inches='tight')
+    # plt.savefig("concrete_attenuation.pdf", bbox_inches='tight')
     plt.show()
 
 f = 3.5e9
@@ -88,7 +89,7 @@ if True:
     plt.xlim(-5, 95)
     plt.ylim(-75, -15)
     plt.grid()
-    plt.savefig("concrete_transmission_vs_angle.pdf", bbox_inches='tight')
+    # plt.savefig("concrete_transmission_vs_angle.pdf", bbox_inches='tight')
     plt.show()
 
     plt.figure(figsize=(8, 6))
@@ -99,7 +100,7 @@ if True:
     plt.xlim(-5, 95)
     plt.ylim(-11, 3)
     plt.grid()
-    plt.savefig("concrete_reflection_vs_angle.pdf", bbox_inches='tight')
+    # plt.savefig("concrete_reflection_vs_angle.pdf", bbox_inches='tight')
     plt.show()
 
 angle = 19.29 * np.pi / 180
@@ -111,6 +112,7 @@ e_r_glass = 6.31
 c_glass = 0.0036
 d_glass = 1.3394
 z = np.linspace(0.04, 0.18, 1000)
+print(c_glass*3.5**d_glass)
 
 if True:
     plt.figure(figsize=(8, 6))
@@ -123,5 +125,5 @@ if True:
     plt.xticks(np.arange(40, 181, 20))
     plt.yticks(np.arange(-5, 1, 1))
     plt.grid()
-    plt.savefig("glass_transmission.pdf", bbox_inches='tight')
+    # plt.savefig("glass_transmission.pdf", bbox_inches='tight')
     plt.show()
