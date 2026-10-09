@@ -251,6 +251,97 @@ def read_taps_from_csv(filename):
         
     return tx_location, rx_positions, rx_orientations, trials_data
 
+
+def write_taps_raw_to_csv(trial_id, a, tau, tx_location, rx_positions, rx_orientations, filename):
+    """
+    Write paths data to a CSV, including Tx location, Rx positions, 
+    and Rx orientations as metadata in the first three lines.
+    """
+    filepath = os.path.join("plot_csv", filename)
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+    
+    file_exists = os.path.isfile(filepath)
+
+    with open(filepath, 'a', newline='') as f:
+        if not file_exists:
+            # Added cls=NumpyEncoder to safely handle any np.array passed here
+            f.write(f"# Tx Location: {json.dumps(tx_location, cls=NumpyEncoder)}\n")
+            f.write(f"# Rx Positions: {json.dumps(rx_positions, cls=NumpyEncoder)}\n")
+            f.write(f"# Rx Orientations: {json.dumps(rx_orientations, cls=NumpyEncoder)}\n")
+            
+            writer = csv.writer(f)
+            writer.writerow(["trial_id", "receiver", "path_index", "a", "tau"])
+        else:
+            writer = csv.writer(f)
+
+        for rx_idx in range(len(tau)):
+            num_taps = len(tau[rx_idx])
+            for tap_idx in range(num_taps):
+                writer.writerow([
+                    trial_id, 
+                    rx_idx, 
+                    tap_idx, 
+                    # json.dumps(a[rx_idx][:, tap_idx], cls=NumpyEncoderComplex),  # Store complex number as JSON
+                    " ".join(str(x) for x in a[rx_idx][:, tap_idx]),
+                    tau[rx_idx][tap_idx]
+                ])
+
+
+def read_taps_raw_from_csv(filename):
+    """
+    Read the metadata (Tx location, Rx positions/orientations) and tap data.
+    """
+    filepath = os.path.join("plot_csv", filename)
+    raw_data = {}
+    
+    with open(filepath, 'r') as f:
+        # 1. Read and parse the first THREE lines
+        line1 = f.readline().strip()
+        line2 = f.readline().strip()
+        line3 = f.readline().strip()
+        
+        tx_location = json.loads(line1.replace("# Tx Location: ", ""))
+        rx_positions = json.loads(line2.replace("# Rx Positions: ", ""))
+        rx_orientations = json.loads(line3.replace("# Rx Orientations: ", ""))
+        
+        num_receivers = len(rx_positions)
+        
+        # 2. Read the rest of the file
+        reader = csv.DictReader(f)
+        for row in reader:
+            trial = row['trial_id']
+            rx = int(row['receiver'])
+            a = np.array([complex(x) for x in row['a'].split(" ")])
+            tau = float(row['tau'])
+            
+            if trial not in raw_data:
+                raw_data[trial] = {'a': {}, 'tau': {}}
+            if rx not in raw_data[trial]['a']:
+                raw_data[trial]['a'][rx] = []
+                raw_data[trial]['tau'][rx] = []
+                
+            raw_data[trial]['a'][rx].append(a)
+            raw_data[trial]['tau'][rx].append(tau)
+
+    # 3. Reconstruct the arrays
+    trials_data = {}
+    for trial, data in raw_data.items():
+        trial_as = [[] for _ in range(num_receivers)]
+        trial_taus = [[] for _ in range(num_receivers)]
+        
+        for rx in data['a']:
+            trial_as[rx] = data['a'][rx]
+            trial_taus[rx] = data['tau'][rx]
+            
+        trials_data[trial] = {
+            'a': [np.array(d) if len(d) > 0 else [] for d in trial_as],
+            'tau': [np.array(a) if len(a) > 0 else [] for a in trial_taus]
+        }
+        
+    return tx_location, rx_positions, rx_orientations, trials_data
+
+
     
 def clear_taps_file(filename):
     """Deletes the previous CSV file if it exists so we start fresh."""

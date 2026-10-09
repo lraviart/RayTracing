@@ -230,6 +230,85 @@ def MUSIC_taps(spectrum, tau, df, K, h_hat):
 
 
 
+### 2D FFT algorithm ###
+
+def FFT_2D_spectrum(a, tau, B, fc=3.5e9, fft_size=512, T=1e-6, Tcir=2e-7, osr=8, alpha=0.1, num_pilots=10, pad_angle=512, pad_tau=1024):
+    
+    # ---------------------------------------------------------
+    # 1. Data Generation (Identical to your original code)
+    # ---------------------------------------------------------
+    fft_size_ = int((fft_size) * (1-alpha)) # Truncation to avoid aliasing
+    num_rx_ant = a.shape[0]
+    h_hat = np.zeros((num_pilots, num_rx_ant, fft_size_), dtype=complex)
+    
+    for i in range(num_pilots):
+        for j in range(num_rx_ant):
+            # Assuming 'com' is imported and available in your scope
+            h_time = com.get_sc_cp_channel_response(a[j], tau, B, osr, T=T, Tcir=Tcir, fft_size=fft_size, alpha=alpha)[0]
+            h_hat[i, j] = np.fft.fftshift(np.fft.fft(h_time))[int(fft_size*alpha/2):int(fft_size*alpha/2)+fft_size_]
+
+    # ---------------------------------------------------------
+    # 2. Data Preparation for FFT
+    # ---------------------------------------------------------
+    # Average across the pilots (snapshots) to improve SNR
+    h_mean = np.mean(h_hat, axis=0) # Shape: (num_rx_ant, fft_size_)
+    
+    # Apply a 2D Window (Hanning) to heavily suppress Rayleigh sidelobes
+    win_ant = np.hanning(num_rx_ant)
+    win_freq = np.hanning(fft_size_)
+    h_windowed = h_mean * win_ant[:, None] * win_freq[None, :]
+
+    # ---------------------------------------------------------
+    # 3. 2D Transform
+    # ---------------------------------------------------------
+    # Step A: IFFT across frequency (axis=1) to transition to Delay (ToA)
+    h_ifft = np.fft.ifft(h_windowed, n=pad_tau, axis=1)
+    
+    # Step B: FFT across antennas (axis=0) to extract Spatial Freq (AoA)
+    h_fft_2d = np.fft.fft(h_ifft, n=pad_angle, axis=0)
+    
+    # Shift zero-angle to the center of the array
+    h_fft_2d_shifted = np.fft.fftshift(h_fft_2d, axes=0)
+    
+    # Compute the power spectrum heatmap
+    P = np.abs(h_fft_2d_shifted)**2
+
+    # ---------------------------------------------------------
+    # 4. Axis Mapping (Bins to Physical Values)
+    # ---------------------------------------------------------
+    # --- Delay (Tau) Mapping ---
+    Delta_f = B / fft_size  # Subcarrier spacing
+    dt = 1.0 / (pad_tau * Delta_f)
+    tau_array = np.arange(pad_tau) * dt
+    
+    # Truncate to Tcir to match the grid bounds of your MUSIC code
+    valid_tau = tau_array <= Tcir
+    if not np.any(valid_tau): # Fallback if Tcir is extremely small
+        valid_tau = np.ones(pad_tau, dtype=bool)
+        
+    tau_array = tau_array[valid_tau]
+    P = P[:, valid_tau]
+    
+    # --- Angle Mapping ---
+    # Shifted indices from -pad_angle/2 to pad_angle/2 - 1
+    m = np.arange(-pad_angle//2, pad_angle//2)
+    
+    # Based on your implicit MUSIC steering vector, element spacing is lambda/2.
+    # spatial_freq = pi * sin(theta) => sin(theta) = 2 * m / pad_angle
+    sin_theta = 2.0 * m / pad_angle
+    
+    # Filter out the "invisible region" where |sin(theta)| > 1
+    valid_angle = np.abs(sin_theta) <= 1.0
+    sin_theta = sin_theta[valid_angle]
+    angles_array = np.arcsin(sin_theta) # Bounds correctly from -pi/2 to pi/2
+    
+    P = P[valid_angle, :]
+    
+    # Return P.T so shape matches your original MUSIC output (len(tau), len(angles)).
+    # We return None for k_opt since FFT doesn't calculate MDL paths.
+    return P.T, tau_array, angles_array, None, h_hat
+
+
 
 ### 2D MUSIC algorithm ###
 
